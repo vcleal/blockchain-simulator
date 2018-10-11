@@ -1,5 +1,4 @@
 from block import Block
-import Blockchain
 import random
 import hashlib
 import datetime

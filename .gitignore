@@ -1,4 +1,5 @@
 *.pyc
 .ipynb_checkpoints
 tests/
+tmp/
 blocks/*.db
