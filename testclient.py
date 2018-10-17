@@ -22,6 +22,13 @@ if __name__ == '__main__':
             print reqsocket.recv_pyobj()
         elif 'startmining' == sys.argv[1]:
             reqsocket.send(sys.argv[1])
+            print reqsocket.recv_string()
+        elif 'stopmining' == sys.argv[1]:
+            reqsocket.send(sys.argv[1])
+            print reqsocket.recv_string()
+        elif 'exit' == sys.argv[1]:
+            reqsocket.send(sys.argv[1])
+            print reqsocket.recv_string()
         else:
             print "Unknown command"
             sys.exit(2)
@@ -29,5 +36,5 @@ if __name__ == '__main__':
         reqsocket.close()
         ctx.term()
     else:
-        print "usage: %s getlastblock|startmining|addpeer <peer>|getpeerinfo" % sys.argv[0]
+        print "usage: %s getlastblock|startmining|stopmining|addpeer <peer>|removepeer <peer>|getpeerinfo" % sys.argv[0]
         sys.exit(2)
