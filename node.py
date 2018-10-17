@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import zmq
 import threading
 import time
@@ -40,11 +42,7 @@ class Node(object):
 
     # Node as client
     def connect(self,d_ip='127.0.0.1',d_port=9000):
-        if self.peers:
-            for ip in self.peers:
-                self.lsocket.connect("tcp://%s:%s" % (ip['ipaddr'], d_port))
-        else: # no peers
-            self.lsocket.connect("tcp://%s:%s" % (d_ip, d_port))
+        self.lsocket.connect("tcp://%s:%s" % (d_ip, d_port))
 
     def listen(self, k, e, bchain):
         db = sqlite3.connect('blocks/blockchain.db')
@@ -56,7 +54,7 @@ class Node(object):
                 print("Got block")
                 print(block_recv.hash)
                 # lock?
-                if bchain.getLastBlock().index != block_recv.index:
+                if bchain.getLastBlock().index < block_recv.index:
                     bchain.addBlocktoBlockchain(block_recv)
                     self.writeBlock(block_recv, c, db)
                 #self.checkBlock(e)
@@ -72,15 +70,26 @@ class Node(object):
     def close(self):
         self.psocket.close(linger=0)
         self.lsocket.close(linger=0)
+        self.repsocket.close(linger=0)
+        self.reqsocket.close(linger=0)
         self.ctx.term()
 
-    def addPeer(self, iplist):
+    def addPeer(self, iplist, port=9000):
+        iplist = iplist if isinstance(iplist, list) else [iplist]
         for ipaddr in iplist:
             peer = {'ipaddr': ipaddr}
             if peer not in self.peers:
                 self.peers.appendleft(peer)
+                self.connect(d_ip=ipaddr,d_port=port)
             else:
                 print("Peer %s already connected" % ipaddr)
+
+    def connectionHandler(self, f):
+        while True:
+            f.wait()
+            # Recebeu msg com d_ip e d_port=9000
+            self.addPeer(d_ip,d_port)
+            f.clear()
 
     def removePeer(self, ipaddr):
         peer = {'ipaddr': ipaddr}
@@ -150,24 +159,47 @@ class Node(object):
             nonce integer)""")
         db.commit()
         cursor.execute('SELECT * FROM blocks WHERE id = (SELECT MAX(id) FROM blocks)')
+        # Last block from own database
         lastBlock_db = cursor.fetchone()
+        # Last block from other nodes
+        rBlock = self.reqrepClient()
+        if rBlock and (rBlock.index > lastBlock_db.index):
+            self.writeBlock(rBlock, cursor, db)
+            lastBlock_db = rBlock
+            # set flag to request other blocks?
         db.close()
         return blockchain.Blockchain(lastBlock_db)
 
-    def reqrepServer(self, blockchain):
+    def reqrepServer(self, blockchain, kill, e, cons, threads):
         self.repsocket.bind("tcp://127.0.0.1:9001")
         while True:
-            message = self.repsocket.recv()
-            print "Received request: ", message
-            time.sleep (1)  
-            self.repsocket.send("Last block index %d" % blockchain.getLastBlock().index)
+            try:
+                messages = self.repsocket.recv_multipart()
+            except zmq.ContextTerminated:
+                break
+            time.sleep (1)
+            cmd = messages[0]
+            if cmd == 'getlastblock':  
+                self.repsocket.send_pyobj(blockchain.getLastBlock())
+            elif cmd == 'addpeer':
+                self.addPeer(messages[1])
+                self.repsocket.send_string("Peer added")
+            elif cmd == 'getpeerinfo':
+                self.repsocket.send_pyobj(self.getPeers())
+            elif cmd == 'startmining':
+                t = self.run(kill, e, blockchain, cons)
+                threads.append(t)
+            else:
+                print 'Command unknown'
 
     def reqrepClient(self):
         self.reqsocket.connect("tcp://127.0.0.1:9001")
-        self.reqsocket.send("last block?")
-        message = self.reqsocket.recv()
-        print message
-
+        self.reqsocket.send("getlastblock")
+        try:
+            b = self.reqsocket.recv_pyobj(zmq.NOBLOCK)
+            return b
+        except zmq.ZMQError:
+            return None
 
 def main():
     # Argument and command-line options parsing
@@ -180,38 +212,45 @@ def main():
                         help='Specify peers IP addresses', default=[])
     args = parser.parse_args()
 
+    threads = []
     cons = consensus.Consensus(5)
     n = Node(args.ipaddr, args.port)
-    
-    # Connection handler thread
-
-    # Connect and check own node database
-    bchain = n.dbConnect()
-    
-    # Sync with other nodes blockchain
-    #sync_thread = threading.Thread(target=n.reqrepServer, kwargs={'blockchain': bchain})
-    #sync_thread.start()
-    #n.reqrepClient()
-    #return
-
-    n.addPeer(args.peers)
-    # Connect to peers
-    n.connect()
     # Flags and thread events
     kill = threading.Event()
     e = threading.Event()
+    f = threading.Event()
+
+    #test = threading.Thread(target=n.reqrepServer, kwargs={'blockchain': blockchain.Blockchain()})
+    #test.start()
+    # Connect and check own node database
+    bchain = n.dbConnect()
+
+    # Connection handler thread
+    #connect_thread = threading.Thread(target=n.connectionHandler)
+    #connect_thread.start()
+
+    if args.peers:
+        n.addPeer(args.peers)
+    else: # Connect to localhost
+        n.connect()
+
+    # Sync for other nodes
+    sync_thread = threading.Thread(target=n.reqrepServer, kwargs={'blockchain': bchain})
+    # sync_thread.start()
+
     # Thread to listen after block messages
     listen_thread = threading.Thread(target=n.listen,
      kwargs={'k': kill, 'e': e, 'bchain': bchain})
     listen_thread.start()
     #
     n.bind()
+    #
     # Miner thread
-    threads = n.run(kill, e, bchain, cons)
+    #threads = n.run(kill, e, bchain, cons)
     # Exit main and threads
     try:
-        while (raw_input()) != 'exit':
-            pass
+        while True:
+            n.reqrepServer(bchain, kill, e, cons, threads)
     except KeyboardInterrupt:
         pass
     finally:
