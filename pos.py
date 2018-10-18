@@ -3,6 +3,9 @@ import Node
 from collections import deque
 import random
 
+#TODO use message to register stake
+#TODO use message to start minting
+
 class POW:
     def __init__(self):
         pass
@@ -17,6 +20,7 @@ class POW:
         sum = get_total_stake()
         probabilities = [x.getstake() / sum for x in peers]
         elected = random_pick(peers, probabilities)
+		# Item, Message, New_Role
         return elected, 'ELECTED', 'MINTER' 
         
     def random_pick(some_list, probabilities):

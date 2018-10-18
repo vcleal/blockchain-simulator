@@ -3,12 +3,16 @@ import Node
 import math
 from scipy.stats import binom
 
+#TODO Verificable Random Function
+#TODO SeedGeneration
+#TODO Message Control
+
 class algorand:
     def __init__(self):
         pass
     
     def sortition(sk, seed, tau, role, w, W):
-        hash, pi = crypto.vrf(seed||role,sk) 
+        hash, pi = crypto.vrf(seed+role,sk) 
         p = tau / W
         j = 0
         
@@ -18,7 +22,7 @@ class algorand:
         return hash. pi, j
     
      def verifysortition(pk, hash, pi, seed, tau, role, w, W):
-         if not verifyvrf(hash, pi, seed||role, pk):
+         if not verifyvrf(hash, pi, seed+role, pk):
             return 0
 
          p = tau / W
