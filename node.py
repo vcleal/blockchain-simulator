@@ -18,7 +18,8 @@ from collections import deque
 
 #TODO blockchain class and database decision (move to only db solution)
 #TODO change db key order
-#TODO check possible db error overwriting
+#TODO check for db error overwriting exception
+#TODO old peers subscribe to new peer?
 
 class StopException(Exception):
     pass
@@ -53,6 +54,7 @@ class Node(object):
         self.k = threading.Event()
         self.e = threading.Event()
         self.f = threading.Event()
+        self.start = threading.Event()
 
     # Node as client
     def connect(self,d_ip='127.0.0.1',d_port=9000):
@@ -62,29 +64,6 @@ class Node(object):
     def disconnect(self,d_ip='127.0.0.1',d_port=9000):
         self.subsocket.disconnect("tcp://%s:%s" % (d_ip, d_port))
         self.reqsocket.disconnect("tcp://%s:%s" % (d_ip, d_port+1))
-
-    def listen(self, bchain):
-        db = sqlite3.connect('blocks/blockchain.db')
-        c = db.cursor()
-        while True and not self.k.is_set():
-            try:
-                # TODO messages types
-                msg, block_recv = self.subsocket.recv_multipart()
-                b = pickle.loads(block_recv)
-                self.e.set()
-                # maybe request block here
-                print("Got block")
-                print(b.hash)
-                # lock?
-                if bchain.getLastBlock().index < b.index:
-                    self.writeBlock(b, c)
-                    bchain.addBlocktoBlockchain(b)
-                    db.commit()
-                #self.checkBlock(e)
-                self.e.clear()
-            except (zmq.ContextTerminated):
-                break
-        db.close()
 
     # Node as server
     def bind(self, socket, ip=None, port=None):
@@ -101,7 +80,7 @@ class Node(object):
         self.repsocket.close(linger=0)
         self.rpcsocket.close(linger=0)
         self.reqsocket.close(linger=0)
-        self.ctx.term()
+        #self.ctx.term()
 
     def addPeer(self, ipaddr, port=9000):
         peer = {'ipaddr': ipaddr}
@@ -118,6 +97,7 @@ class Node(object):
         try:
             self.peers.remove(peer)
             self.disconnect(d_ip=ipaddr,d_port=self.port)
+            time.sleep(1)
         except ValueError:
             return "Peer %s not connected" % ipaddr
         return "Peer %s removed" % ipaddr
@@ -128,21 +108,48 @@ class Node(object):
     def setBalance(self, value):
         self.balance = value
 
+    def listen(self, bchain):
+        db = sqlite3.connect('blocks/blockchain.db')
+        c = db.cursor()
+        while True and not self.k.is_set():
+            try:
+                # TODO messages types
+                msg, block_recv = self.subsocket.recv_multipart()
+                self.e.set()
+                self.f.clear()
+                b = pickle.loads(block_recv)
+                # maybe request block here
+                print("Got block")
+                print(b.hash)
+                # Verify block
+                if bchain.getLastBlock().index < b.index:
+                    self.writeBlock(b, c)
+                    bchain.addBlocktoBlockchain(b)
+                    db.commit()
+                #
+                self.f.set()
+            except (zmq.ContextTerminated):
+                break
+        db.close()
+
     def mine(self, bchain, cons):
         # target = 2 ** (20) - 1
         name = threading.current_thread().getName()
         db = sqlite3.connect('blocks/blockchain.db')
         c = db.cursor()
         while True and not self.k.is_set():
-            stop = self.e.is_set() # move e flag inside generate?
+            #stop = self.e.is_set() # move e flag inside generate?
+            self.start.wait()
             self.f.wait()
             lastblock = bchain.getLastBlock()
-            b = cons.generateNewblock(lastblock,stop)
+            b = cons.generateNewblock(lastblock,self.e)
             if b and not self.e.is_set():
                 self.writeBlock(b, c)
                 bchain.addBlocktoBlockchain(b)
                 self.psocket.send_multipart(['block', pickle.dumps(b, 2)])
                 db.commit()
+            else:
+                self.e.clear()
         db.close()
 
     def writeBlock(self, b, c):
@@ -187,14 +194,14 @@ class Node(object):
         cursor.execute('SELECT * FROM blocks WHERE id = (SELECT MAX(id) FROM blocks)')
         # Last block from own database
         lastBlock_db = cursor.fetchone()
+        # Empty database
         if not lastBlock_db:
-            b = block.Block(0,"",0,timestamp="2018-10-10 00:00:0.0")
-            self.writeBlock(b, cursor)
-            lastBlock_db = [0]
+            lastBlock_db = blockchain.Blockchain().getLastBlock()
+            self.writeBlock(lastBlock_db, cursor)
         # Last block from other nodes
         rBlock = self.reqLastBlock()
-        if rBlock and lastBlock_db and (rBlock.index > lastBlock_db[0]):
-            first = lastBlock_db[0]
+        if rBlock and (rBlock.index > lastBlock_db.index):
+            first = lastBlock_db.index
             last = rBlock.index
             if (last-first) == 1:
                 self.writeBlock(rBlock, cursor)
@@ -222,7 +229,7 @@ class Node(object):
         self.bind(self.repsocket, port=self.port+1)
         time.sleep(1)
         while True and not self.k.is_set():
-            try:
+            try: # TODO check this socket hanging
                 messages = self.repsocket.recv_multipart()
             except zmq.ContextTerminated:
                 break
@@ -242,6 +249,7 @@ class Node(object):
                 self.repsocket.send_pyobj(b)
             else:
                 pass
+        db.close()
 
     def rpcServer(self, blockchain):
         db = sqlite3.connect('blocks/blockchain.db')
@@ -277,9 +285,10 @@ class Node(object):
                 self.rpcsocket.send_pyobj(self.getPeers())
             elif cmd == 'startmining':
                 self.rpcsocket.send_string('Starting mining...')
+                self.start.set()
                 self.f.set()
             elif cmd == 'stopmining':
-                self.f.clear()
+                self.start.clear()
                 self.rpcsocket.send_string('Stopping mining...')
             elif cmd == 'exit':
                 self.rpcsocket.send_string('Exiting...')
@@ -288,6 +297,7 @@ class Node(object):
             else:
                 self.rpcsocket.send_string('Command unknown')
                 print 'Command unknown'
+        db.close()
 
 # Client request-reply functions
 
@@ -295,7 +305,6 @@ class Node(object):
         self.reqsocket.send("getlastblock")
         try:
             evts = dict(self.poller.poll(5000))
-            print evts
         except KeyboardInterrupt:
             return None
         if self.reqsocket in evts and evts[self.reqsocket] == zmq.POLLIN:
@@ -303,12 +312,6 @@ class Node(object):
             return b
         else:
             return None
-        # try:
-        #     # non-blocking
-        #     b = self.reqsocket.recv_pyobj(zmq.NOBLOCK)
-        #     return b
-        # except zmq.ZMQError:
-        #     return None
 
     def reqBlock(self, index):
         # TODO check zmq timeout
@@ -330,6 +333,10 @@ class Node(object):
         else:
             return None
 
+    def exit(self, ip):
+        pass
+
+
 def main():
     # Argument and command-line options parsing
     parser = argparse.ArgumentParser(description='Blockchain simulation')
@@ -344,7 +351,7 @@ def main():
     args = parser.parse_args()
 
     threads = []
-    cons = consensus.Consensus(5)
+    cons = consensus.Consensus(4)
     n = Node(args.ipaddr, args.port)
 
     # Connect to predefined peers
@@ -360,7 +367,7 @@ def main():
 
     # Thread to listen request messages
     t = n.sync(bchain)
-    #threads.append(t)
+    threads.append(t)
 
     # Thread to listen broadcast messages
     listen_thread = threading.Thread(target=n.listen,
@@ -373,8 +380,9 @@ def main():
     # Maybe check last block again before mining
     # Miner thread
     t = n.doConsensus(bchain, cons)
-    #threads.append(t)
+    threads.append(t)
     if args.miner:
+        n.start.set()
         n.f.set()
     # Main thread
     try:
@@ -385,13 +393,19 @@ def main():
     except (KeyboardInterrupt, StopException):
         pass
     finally:
+        #n.exit(args.ipaddr)
         n.k.set()
         n.e.set()
         n.f.set()
+        n.start.set()
         #for t in threads:
         #    t.join()
         n.close()
         print bchain.Info()
+        try: # TODO fix stucking on term or Assertion failed
+            n.ctx.term()
+        except KeyboardInterrupt:
+            pass
 
 if __name__ == '__main__':
     main()

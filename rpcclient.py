@@ -4,6 +4,8 @@ import zmq
 import block
 import sys
 
+#TODO argparse and real rpc
+
 if __name__ == '__main__':
     ctx = zmq.Context.instance()
     reqsocket = ctx.socket(zmq.REQ)

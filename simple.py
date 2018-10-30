@@ -22,14 +22,17 @@ def testHostWithPrivateDirs():
     net = Mininet( topo=topo, host=host )
     net.start()
     popens = {}
-    sleep(1)
+    sleep(2)
     for h in net.hosts:
         o = net.hosts[:]
         o.remove(h)
         ips = map(lambda x: x.IP(),o)
-        sleep(1)
+        #sleep(1)
         info('*** Blockchain node starting on %s\n' % h)
-        h.cmd('python node.py -i', h.IP(), '-p 9000 --peers', ' '.join(ips), ' &')
+        string = './node.py -i ' + h.IP() + ' -p 9000 --peers ' + ' '.join(ips) + ' &'
+        #info(string)
+        h.cmd(string)
+        # h.waitOutput()
         # popens[ h ] = h.popen('python node.py -i', h.IP(), '-p 9000 --peers', ' '.join(ips))
         # endTime = time() + 60
         # for h, line in pmonitor( popens, timeoutms=500 ):
