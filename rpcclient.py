@@ -17,6 +17,9 @@ if __name__ == '__main__':
         elif 'addpeer' == sys.argv[1]:
             reqsocket.send_multipart([sys.argv[1], sys.argv[2]])
             print reqsocket.recv_string()
+        elif 'removepeer' == sys.argv[1]:
+            reqsocket.send_multipart([sys.argv[1], sys.argv[2]])
+            print reqsocket.recv_string()
         elif 'getblock' == sys.argv[1]:
             reqsocket.send_multipart([sys.argv[1], sys.argv[2]])
             b = reqsocket.recv_pyobj()
