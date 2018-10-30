@@ -3,7 +3,7 @@
 import zmq
 import threading
 import time
-#import sys
+import sys
 #import hashlib
 #import random
 import argparse
@@ -36,12 +36,15 @@ class Node(object):
         self.ipaddr = ipaddr
         self.port = port
         self.ctx = zmq.Context.instance()
+        self.poller = zmq.Poller()
         self.reqsocket = self.ctx.socket(zmq.REQ)
         self.repsocket = self.ctx.socket(zmq.REP)
         self.rpcsocket = self.ctx.socket(zmq.REP)
         self.psocket = self.ctx.socket(zmq.PUB)
         self.subsocket = self.ctx.socket(zmq.SUB)
         self.subsocket.setsockopt(zmq.SUBSCRIBE, b'')
+        self.poller.register(self.reqsocket, zmq.POLLIN)
+        #self.reqsocket.RCVTIMEO = 3000 # in milliseconds
         self.balance = 0
         self.stake = 0
         self.synced = False
@@ -74,8 +77,8 @@ class Node(object):
                 print(b.hash)
                 # lock?
                 if bchain.getLastBlock().index < b.index:
-                    bchain.addBlocktoBlockchain(b)
                     self.writeBlock(b, c)
+                    bchain.addBlocktoBlockchain(b)
                     db.commit()
                 #self.checkBlock(e)
                 self.e.clear()
@@ -136,9 +139,9 @@ class Node(object):
             lastblock = bchain.getLastBlock()
             b = cons.generateNewblock(lastblock,stop)
             if b and not self.e.is_set():
+                self.writeBlock(b, c)
                 bchain.addBlocktoBlockchain(b)
                 self.psocket.send_multipart(['block', pickle.dumps(b, 2)])
-                self.writeBlock(b, c)
                 db.commit()
         db.close()
 
@@ -187,16 +190,18 @@ class Node(object):
         if not lastBlock_db:
             b = block.Block(0,"",0,timestamp="2018-10-10 00:00:0.0")
             self.writeBlock(b, cursor)
+            lastBlock_db = [0]
         # Last block from other nodes
         rBlock = self.reqLastBlock()
-        if rBlock and lastBlock_db and (rBlock.index > lastBlock_db.index):
-            first = lastBlock_db.index
+        if rBlock and lastBlock_db and (rBlock.index > lastBlock_db[0]):
+            first = lastBlock_db[0]
             last = rBlock.index
             if (last-first) == 1:
                 self.writeBlock(rBlock, cursor)
             else:
-                l = self.reqBlocks(first, last)
-                self.writeBlock(l, cursor)
+                l = self.reqBlocks(first+1, last)
+                if  l:
+                    self.writeBlock(l, cursor)
             lastBlock_db = rBlock
             # set flag to request other blocks?
             #self.synced = True
@@ -215,6 +220,7 @@ class Node(object):
         db = sqlite3.connect('blocks/blockchain.db')
         cursor = db.cursor()
         self.bind(self.repsocket, port=self.port+1)
+        time.sleep(1)
         while True and not self.k.is_set():
             try:
                 messages = self.repsocket.recv_multipart()
@@ -241,6 +247,7 @@ class Node(object):
         db = sqlite3.connect('blocks/blockchain.db')
         cursor = db.cursor()
         self.bind(self.rpcsocket, ip='127.0.0.1', port=9999)
+        time.sleep(1)
         while True:
             try:
                 messages = self.rpcsocket.recv_multipart()
@@ -276,6 +283,7 @@ class Node(object):
                 self.rpcsocket.send_string('Stopping mining...')
             elif cmd == 'exit':
                 self.rpcsocket.send_string('Exiting...')
+                #sys.exit(0)
                 raise StopException
             else:
                 self.rpcsocket.send_string('Command unknown')
@@ -286,11 +294,21 @@ class Node(object):
     def reqLastBlock(self):
         self.reqsocket.send("getlastblock")
         try:
-            # non-blocking
-            b = self.reqsocket.recv_pyobj(zmq.NOBLOCK)
-            return b
-        except zmq.ZMQError:
+            evts = dict(self.poller.poll(5000))
+            print evts
+        except KeyboardInterrupt:
             return None
+        if self.reqsocket in evts and evts[self.reqsocket] == zmq.POLLIN:
+            b = self.reqsocket.recv_pyobj()
+            return b
+        else:
+            return None
+        # try:
+        #     # non-blocking
+        #     b = self.reqsocket.recv_pyobj(zmq.NOBLOCK)
+        #     return b
+        # except zmq.ZMQError:
+        #     return None
 
     def reqBlock(self, index):
         # TODO check zmq timeout
@@ -300,8 +318,17 @@ class Node(object):
 
     def reqBlocks(self, first, last):
         # TODO check zmq timeout
-        self.reqsocket.send_multipart(["getblocks", first, last])
-        return self.reqsocket.recv_pyobj()
+        self.reqsocket.send_multipart(["getblocks", str(first), str(last)])
+        try:
+            evts = dict(self.poller.poll(5000))
+            print evts
+        except KeyboardInterrupt:
+            return None
+        if self.reqsocket in evts and evts[self.reqsocket] == zmq.POLLIN:
+            b = self.reqsocket.recv_pyobj()
+            return b
+        else:
+            return None
 
 def main():
     # Argument and command-line options parsing
@@ -327,7 +354,7 @@ def main():
             n.addPeer(ipaddr)
     else: # Connect to localhost
         n.connect()
-
+    time.sleep(1)
     # Connect and check own node database
     bchain = n.dbConnect()
 
@@ -341,11 +368,12 @@ def main():
     listen_thread.start()
     #
     n.bind(n.psocket)
+    time.sleep(1)
     #
     # Maybe check last block again before mining
     # Miner thread
     t = n.doConsensus(bchain, cons)
-    threads.append(t)
+    #threads.append(t)
     if args.miner:
         n.f.set()
     # Main thread
@@ -360,8 +388,8 @@ def main():
         n.k.set()
         n.e.set()
         n.f.set()
-        for t in threads:
-            t.join()
+        #for t in threads:
+        #    t.join()
         n.close()
         print bchain.Info()
 
