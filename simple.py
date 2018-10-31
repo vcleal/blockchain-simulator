@@ -3,7 +3,6 @@ from mininet.node import Host
 from mininet.cli import CLI
 from mininet.topo import SingleSwitchTopo
 from mininet.log import setLogLevel, info
-from mininet.util import pmonitor
 
 from functools import partial
 from time import sleep, time
@@ -22,42 +21,28 @@ def testHostWithPrivateDirs():
     net = Mininet( topo=topo, host=host )
     net.start()
     popens = {}
-    sleep(2)
-    for h in net.hosts:
-        o = net.hosts[:]
-        o.remove(h)
-        ips = map(lambda x: x.IP(),o)
-        #sleep(1)
-        info('*** Blockchain node starting on %s\n' % h)
-        string = './node.py -i ' + h.IP() + ' -p 9000 --peers ' + ' '.join(ips) + ' &'
-        #info(string)
-        h.cmd(string)
-        # h.waitOutput()
-        # popens[ h ] = h.popen('python node.py -i', h.IP(), '-p 9000 --peers', ' '.join(ips))
-        # endTime = time() + 60
-        # for h, line in pmonitor( popens, timeoutms=500 ):
-        #     if h:
-        #         print '%s: %s' % ( h.name, line ),
-        #         if time() >= endTime:
-        #             for p in popens.values():
-        #                 p.send_signal( SIGINT )
-    # info(popens)
+    startServer(net)
     CLI( net )
     #stopServer(net.hosts)
     net.stop()
 
-def addPeers(hosts):
-    for h in hosts:
-        h.cmd('')
-        #others = hosts[:]
-        #others.remove(h)
-        #for o in others:
-        #        h.cmd('bitcoin-cli -regtest addnode', o.IP(), 'onetry')
+def startServer(net):
+    for h in net.hosts:
+        o = net.hosts[:]
+        o.remove(h)
+        ips = map(lambda x: x.IP(),o)
+        peers = ' '.join(ips)
+        #sleep(1)
+        info('*** Blockchain node starting on %s\n' % h)
+        h.cmd('python node.py -i', h.IP(), '-p 9000 --peers %s &' % peers)
+        # subprocessing
+        # popens[ h ] = h.popen('python node.py -i', h.IP(), '-p 9000 --peers', ' '.join(ips))
 
 def stopServer(hosts):
     for h in hosts:
+        # TODO
         h.cmd('')
-        info('*** Bitcoin server stopping on %s\n' % h)
+        info('*** Blockchain server stopping on %s\n' % h)
 
 if __name__ == '__main__':
     setLogLevel( 'info' )

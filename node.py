@@ -20,6 +20,7 @@ from collections import deque
 #TODO change db key order
 #TODO check for db error overwriting exception
 #TODO old peers subscribe to new peer?
+#TODO thread to check online REP servers before dbconnect
 
 class StopException(Exception):
     pass
@@ -35,7 +36,7 @@ class Node(object):
 
     def __init__(self, ipaddr='127.0.0.1', port=9000):
         self.ipaddr = ipaddr
-        self.port = port
+        self.port = int(port)
         self.ctx = zmq.Context.instance()
         self.poller = zmq.Poller()
         self.reqsocket = self.ctx.socket(zmq.REQ)
@@ -113,12 +114,10 @@ class Node(object):
         c = db.cursor()
         while True and not self.k.is_set():
             try:
-                # TODO messages types
                 msg, block_recv = self.subsocket.recv_multipart()
                 self.e.set()
                 self.f.clear()
                 b = pickle.loads(block_recv)
-                # maybe request block here
                 print("Got block")
                 print(b.hash)
                 # Verify block
@@ -197,15 +196,18 @@ class Node(object):
         # Empty database
         if not lastBlock_db:
             lastBlock_db = blockchain.Blockchain().getLastBlock()
+            first = 0
             self.writeBlock(lastBlock_db, cursor)
+        else:
+            first = lastBlock_db[0]
         # Last block from other nodes
         rBlock = self.reqLastBlock()
-        if rBlock and (rBlock.index > lastBlock_db.index):
-            first = lastBlock_db.index
+        if rBlock and (rBlock.index > first):
             last = rBlock.index
             if (last-first) == 1:
                 self.writeBlock(rBlock, cursor)
             else:
+                print 'requesting... ', first, 'to ', last
                 l = self.reqBlocks(first+1, last)
                 if  l:
                     self.writeBlock(l, cursor)
@@ -305,12 +307,13 @@ class Node(object):
         self.reqsocket.send("getlastblock")
         try:
             evts = dict(self.poller.poll(5000))
+            print evts
         except KeyboardInterrupt:
             return None
         if self.reqsocket in evts and evts[self.reqsocket] == zmq.POLLIN:
             b = self.reqsocket.recv_pyobj()
             return b
-        else:
+        else: # offline
             return None
 
     def reqBlock(self, index):
@@ -320,7 +323,6 @@ class Node(object):
         return block.Block(b[0],b[2],b[4],b[3],b[1])
 
     def reqBlocks(self, first, last):
-        # TODO check zmq timeout
         self.reqsocket.send_multipart(["getblocks", str(first), str(last)])
         try:
             evts = dict(self.poller.poll(5000))
@@ -330,7 +332,7 @@ class Node(object):
         if self.reqsocket in evts and evts[self.reqsocket] == zmq.POLLIN:
             b = self.reqsocket.recv_pyobj()
             return b
-        else:
+        else: # offline
             return None
 
     def exit(self, ip):
@@ -351,7 +353,7 @@ def main():
     args = parser.parse_args()
 
     threads = []
-    cons = consensus.Consensus(4)
+    cons = consensus.Consensus(5)
     n = Node(args.ipaddr, args.port)
 
     # Connect to predefined peers
@@ -362,6 +364,9 @@ def main():
     else: # Connect to localhost
         n.connect()
     time.sleep(1)
+
+    #
+
     # Connect and check own node database
     bchain = n.dbConnect()
 
