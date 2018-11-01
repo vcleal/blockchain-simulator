@@ -3,9 +3,7 @@
 import zmq
 import threading
 import time
-import sys
-#import hashlib
-#import random
+#import sys
 import argparse
 import block
 import blockchain
@@ -13,14 +11,14 @@ import consensus
 import sqlite3
 import pickle
 from collections import deque
-#
-#import logging
+import logging
 
 #TODO blockchain class and database decision (move to only db solution)
-#TODO change db key order
 #TODO check for db error overwriting exception
 #TODO old peers subscribe to new peer?
 #TODO thread to check online REP servers before dbconnect
+
+#TODO check python 3+ compatibility
 
 class StopException(Exception):
     pass
@@ -90,7 +88,7 @@ class Node(object):
             self.connect(d_ip=ipaddr,d_port=self.port)
             return "Peer %s connected" % ipaddr
         else:
-            print("Peer %s already connected" % ipaddr)
+            logging.warning("Peer %s already connected" % ipaddr)
             return "Peer %s already connected" % ipaddr
 
     def removePeer(self, ipaddr):
@@ -100,6 +98,7 @@ class Node(object):
             self.disconnect(d_ip=ipaddr,d_port=self.port)
             time.sleep(1)
         except ValueError:
+            logging.warning("Peer %s not connected" % ipaddr)
             return "Peer %s not connected" % ipaddr
         return "Peer %s removed" % ipaddr
 
@@ -118,8 +117,8 @@ class Node(object):
                 self.e.set()
                 self.f.clear()
                 b = pickle.loads(block_recv)
-                print("Got block")
-                print(b.hash)
+                logging.info("Got block %s" % b.hash)
+                #logging.info(b.hash)
                 # Verify block
                 if bchain.getLastBlock().index < b.index:
                     self.writeBlock(b, c)
@@ -152,15 +151,18 @@ class Node(object):
         db.close()
 
     def writeBlock(self, b, c):
-        if isinstance(b, list):
-            c.executemany('INSERT INTO blocks VALUES (?,?,?,?,?)', b)
-        else:
-            c.execute('INSERT INTO blocks VALUES (?,?,?,?,?)', (
-                    b.__dict__['index'],
-                    b.__dict__['timestamp'],
-                    b.__dict__['prev_hash'],
-                    b.__dict__['hash'],
-                    b.__dict__['nonce']))
+        try:
+            if isinstance(b, list):
+                c.executemany('INSERT INTO blocks VALUES (?,?,?,?,?)', b)
+            else:
+                c.execute('INSERT INTO blocks VALUES (?,?,?,?,?)', (
+                        b.__dict__['index'],
+                        b.__dict__['timestamp'],
+                        b.__dict__['prev_hash'],
+                        b.__dict__['hash'],
+                        b.__dict__['nonce']))
+        except sqlite3.IntegrityError:
+            logging.warning('db insert duplicated block')
         #db.commit()
 
     def readBlock(self):
@@ -207,7 +209,7 @@ class Node(object):
             if (last-first) == 1:
                 self.writeBlock(rBlock, cursor)
             else:
-                print 'requesting... ', first, 'to ', last
+                logging.debug('requesting blocks %s to %s', first, last)
                 l = self.reqBlocks(first+1, last)
                 if  l:
                     self.writeBlock(l, cursor)
@@ -294,11 +296,10 @@ class Node(object):
                 self.rpcsocket.send_string('Stopping mining...')
             elif cmd == 'exit':
                 self.rpcsocket.send_string('Exiting...')
-                #sys.exit(0)
                 raise StopException
             else:
                 self.rpcsocket.send_string('Command unknown')
-                print 'Command unknown'
+                logging.warning('Command unknown')
         db.close()
 
 # Client request-reply functions
@@ -307,13 +308,14 @@ class Node(object):
         self.reqsocket.send("getlastblock")
         try:
             evts = dict(self.poller.poll(5000))
-            print evts
+            logging.debug('Requesting most recent block')
         except KeyboardInterrupt:
             return None
         if self.reqsocket in evts and evts[self.reqsocket] == zmq.POLLIN:
             b = self.reqsocket.recv_pyobj()
             return b
         else: # offline
+            logging.debug('empty pollin evt')
             return None
 
     def reqBlock(self, index):
@@ -326,18 +328,28 @@ class Node(object):
         self.reqsocket.send_multipart(["getblocks", str(first), str(last)])
         try:
             evts = dict(self.poller.poll(5000))
-            print evts
         except KeyboardInterrupt:
             return None
         if self.reqsocket in evts and evts[self.reqsocket] == zmq.POLLIN:
             b = self.reqsocket.recv_pyobj()
             return b
         else: # offline
+            logging.debug('empty pollin evt')
             return None
 
     def exit(self, ip):
         pass
 
+    def hello(self):
+        pass
+
+_LOG_LEVEL_STRINGS = ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG']
+
+def _log_level_to_int(loglevel):
+    numeric_level = getattr(logging, loglevel.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise argparse.ArgumentTypeError('Invalid log level: %s' % loglevel)
+    return numeric_level
 
 def main():
     # Argument and command-line options parsing
@@ -350,7 +362,16 @@ def main():
                         help='Specify peers IP addresses', default=[])
     parser.add_argument('--miner', dest='miner', action='store_true',
                         help='Start the node immediately mining')
+    parser.add_argument('--log', dest='loglevel', type=_log_level_to_int, nargs='?', default='warning',
+                        help='Set the logging output level {0}'.format(_LOG_LEVEL_STRINGS))
     args = parser.parse_args()
+    
+    logging.basicConfig(filename='/tmp/log/example.log', filemode='w', level=logging.DEBUG,
+        format='%(asctime)s %(levelname)s: %(message)s', datefmt='%d/%m/%Y %I:%M:%S')
+    # set up logging to console
+    console = logging.StreamHandler()
+    console.setLevel(args.loglevel)
+    logging.getLogger('').addHandler(console)
 
     threads = []
     cons = consensus.Consensus(5)
@@ -362,6 +383,7 @@ def main():
         for ipaddr in iplist:
             n.addPeer(ipaddr)
     else: # Connect to localhost
+        logging.info('Connecting to localhost...')
         n.connect()
     time.sleep(1)
 
