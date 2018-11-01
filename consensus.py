@@ -2,6 +2,7 @@ from block import Block
 import random
 import hashlib
 import datetime
+import threading
 
 class Consensus:
     def __init__(self, difficulty):
@@ -15,7 +16,7 @@ class Consensus:
         timestamp = str(datetime.datetime.now())
         header = chr(random.randint(1,100)) + str(lastBlock.index + 1) + str(lastBlock.hash) + timestamp
         for nonce in xrange(self.MAX_NONCE):
-            if stop:
+            if stop.is_set():
                 return False, False, False
             hash_result = hashlib.sha256(str(header)+str(nonce)).hexdigest()
             if int(hash_result[0:self.difficulty], 16) == 0:

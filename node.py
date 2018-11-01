@@ -3,20 +3,24 @@
 import zmq
 import threading
 import time
-#import sys
-import hashlib
-import block
-import random
+import sys
+#import hashlib
+#import random
 import argparse
+import block
 import blockchain
 import consensus
 import sqlite3
+import pickle
 from collections import deque
 #
 #import logging
 
-#TODO database request and send
-#TODO blockchain class and database decision
+#TODO blockchain class and database decision (move to only db solution)
+#TODO change db key order
+#TODO check for db error overwriting exception
+#TODO old peers subscribe to new peer?
+#TODO thread to check online REP servers before dbconnect
 
 class StopException(Exception):
     pass
@@ -25,77 +29,76 @@ class Node(object):
     """docstring"""
 
     ctx = None
-    psocket = None
-    lsocket = None
+    # psocket = None
+    # subsocket = None
+    # rpcsocket = None
+    # reqsocket = None
 
-
-    def __init__(self, ipaddr, port):
+    def __init__(self, ipaddr='127.0.0.1', port=9000):
         self.ipaddr = ipaddr
-        self.port = port
+        self.port = int(port)
         self.ctx = zmq.Context.instance()
+        self.poller = zmq.Poller()
         self.reqsocket = self.ctx.socket(zmq.REQ)
         self.repsocket = self.ctx.socket(zmq.REP)
+        self.rpcsocket = self.ctx.socket(zmq.REP)
         self.psocket = self.ctx.socket(zmq.PUB)
-        self.lsocket = self.ctx.socket(zmq.SUB)
-        self.lsocket.setsockopt(zmq.SUBSCRIBE, b'')
+        self.subsocket = self.ctx.socket(zmq.SUB)
+        self.subsocket.setsockopt(zmq.SUBSCRIBE, b'')
+        self.poller.register(self.reqsocket, zmq.POLLIN)
+        #self.reqsocket.RCVTIMEO = 3000 # in milliseconds
         self.balance = 0
         self.stake = 0
+        self.synced = False
         self.peers = deque()
+        # Flags and thread events
+        self.k = threading.Event()
+        self.e = threading.Event()
+        self.f = threading.Event()
+        self.start = threading.Event()
 
     # Node as client
     def connect(self,d_ip='127.0.0.1',d_port=9000):
-        self.lsocket.connect("tcp://%s:%s" % (d_ip, d_port))
+        self.subsocket.connect("tcp://%s:%s" % (d_ip, d_port))
+        self.reqsocket.connect("tcp://%s:%s" % (d_ip, d_port+1))
 
     def disconnect(self,d_ip='127.0.0.1',d_port=9000):
-        self.lsocket.disconnect("tcp://%s:%s" % (d_ip, d_port))
-
-    def listen(self, k, e, bchain):
-        db = sqlite3.connect('blocks/blockchain.db')
-        c = db.cursor()
-        while True and not k.is_set():
-            try:
-                block_recv = self.lsocket.recv_pyobj()
-                e.set()
-                print("Got block")
-                print(block_recv.hash)
-                # lock?
-                if bchain.getLastBlock().index < block_recv.index:
-                    bchain.addBlocktoBlockchain(block_recv)
-                    self.writeBlock(block_recv, c, db)
-                #self.checkBlock(e)
-                e.clear()
-            except (zmq.ContextTerminated):
-                break
-        db.close()
+        self.subsocket.disconnect("tcp://%s:%s" % (d_ip, d_port))
+        self.reqsocket.disconnect("tcp://%s:%s" % (d_ip, d_port+1))
 
     # Node as server
-    def bind(self):
-        self.psocket.bind("tcp://%s:%s" % (self.ipaddr, self.port))
+    def bind(self, socket, ip=None, port=None):
+        if port and ip:
+            socket.bind("tcp://%s:%s" % (ip, port))
+        elif port:
+            socket.bind("tcp://%s:%s" % (self.ipaddr, port))
+        else:
+            socket.bind("tcp://%s:%s" % (self.ipaddr, self.port))
 
     def close(self):
         self.psocket.close(linger=0)
-        self.lsocket.close(linger=0)
+        self.subsocket.close(linger=0)
         self.repsocket.close(linger=0)
+        self.rpcsocket.close(linger=0)
         self.reqsocket.close(linger=0)
-        self.ctx.term()
+        #self.ctx.term()
 
-    def addPeer(self, iplist, port=9000):
-        iplist = iplist if isinstance(iplist, list) else [iplist]
-        for ipaddr in iplist:
-            peer = {'ipaddr': ipaddr}
-            if peer not in self.peers:
-                self.peers.appendleft(peer)
-                self.connect(d_ip=ipaddr,d_port=self.port)
-                return "Peer %s connected" % ipaddr
-            else:
-                print("Peer %s already connected" % ipaddr)
-                return "Peer %s already connected" % ipaddr
+    def addPeer(self, ipaddr, port=9000):
+        peer = {'ipaddr': ipaddr}
+        if peer not in self.peers:
+            self.peers.appendleft(peer)
+            self.connect(d_ip=ipaddr,d_port=self.port)
+            return "Peer %s connected" % ipaddr
+        else:
+            print("Peer %s already connected" % ipaddr)
+            return "Peer %s already connected" % ipaddr
 
     def removePeer(self, ipaddr):
         peer = {'ipaddr': ipaddr}
         try:
             self.peers.remove(peer)
             self.disconnect(d_ip=ipaddr,d_port=self.port)
+            time.sleep(1)
         except ValueError:
             return "Peer %s not connected" % ipaddr
         return "Peer %s removed" % ipaddr
@@ -106,36 +109,64 @@ class Node(object):
     def setBalance(self, value):
         self.balance = value
 
-    def doConsensus(self, k, e, f, bchain, cons):
-        #bchain = ''
-        target = 2 ** (20) - 1
+    def listen(self, bchain):
+        db = sqlite3.connect('blocks/blockchain.db')
+        c = db.cursor()
+        while True and not self.k.is_set():
+            try:
+                msg, block_recv = self.subsocket.recv_multipart()
+                self.e.set()
+                self.f.clear()
+                b = pickle.loads(block_recv)
+                print("Got block")
+                print(b.hash)
+                # Verify block
+                if bchain.getLastBlock().index < b.index:
+                    self.writeBlock(b, c)
+                    bchain.addBlocktoBlockchain(b)
+                    db.commit()
+                #
+                self.f.set()
+            except (zmq.ContextTerminated):
+                break
+        db.close()
+
+    def mine(self, bchain, cons):
+        # target = 2 ** (20) - 1
         name = threading.current_thread().getName()
         db = sqlite3.connect('blocks/blockchain.db')
         c = db.cursor()
-        while True and not k.is_set():
-            stop = e.is_set() # move e flag inside generate
-            f.wait()
+        while True and not self.k.is_set():
+            #stop = self.e.is_set() # move e flag inside generate?
+            self.start.wait()
+            self.f.wait()
             lastblock = bchain.getLastBlock()
-            b = cons.generateNewblock(lastblock,stop)
-            if b and not stop:
+            b = cons.generateNewblock(lastblock,self.e)
+            if b and not self.e.is_set():
+                self.writeBlock(b, c)
                 bchain.addBlocktoBlockchain(b)
-                self.psocket.send_pyobj(b)
-                self.writeBlock(b, c, db)
+                self.psocket.send_multipart(['block', pickle.dumps(b, 2)])
+                db.commit()
+            else:
+                self.e.clear()
         db.close()
 
-    def writeBlock(self, b, c, db):
-        c.execute('INSERT INTO blocks VALUES (?,?,?,?,?)', (
-                b.__dict__['index'],
-                b.__dict__['timestamp'],
-                b.__dict__['prev_hash'],
-                b.__dict__['hash'],
-                b.__dict__['nonce']))
-        db.commit()
+    def writeBlock(self, b, c):
+        if isinstance(b, list):
+            c.executemany('INSERT INTO blocks VALUES (?,?,?,?,?)', b)
+        else:
+            c.execute('INSERT INTO blocks VALUES (?,?,?,?,?)', (
+                    b.__dict__['index'],
+                    b.__dict__['timestamp'],
+                    b.__dict__['prev_hash'],
+                    b.__dict__['hash'],
+                    b.__dict__['nonce']))
+        #db.commit()
 
     def readBlock(self):
         pass
 
-    def checkBlock(self, e):
+    def checkBlock(self):
         #if new_hash == (hashlib.sha256(str(name+bchain[0])+str(nonce)).hexdigest()):
         #raise StopMineException("")
         #self.psocket.send_string("ok")
@@ -144,9 +175,9 @@ class Node(object):
         #else:
         #    return False
 
-    def run(self, kill, e, f, bchain, cons):
-        m1 = threading.Thread(name='Miner',target=self.doConsensus,
-        kwargs={'k': kill, 'e': e, 'f': f, 'bchain': bchain, 'cons': cons})
+    def doConsensus(self, bchain, cons):
+        m1 = threading.Thread(name='Miner',target=self.mine,
+         kwargs={'bchain': bchain, 'cons': cons})
         m1.start()
         return m1
 
@@ -159,60 +190,154 @@ class Node(object):
             phash text, 
             hash text, 
             nonce integer)""")
-        db.commit()
         cursor.execute('SELECT * FROM blocks WHERE id = (SELECT MAX(id) FROM blocks)')
         # Last block from own database
         lastBlock_db = cursor.fetchone()
+        # Empty database
+        if not lastBlock_db:
+            lastBlock_db = blockchain.Blockchain().getLastBlock()
+            first = 0
+            self.writeBlock(lastBlock_db, cursor)
+        else:
+            first = lastBlock_db[0]
         # Last block from other nodes
-        rBlock = self.reqrepClient()
-        if rBlock and (rBlock.index > lastBlock_db.index):
-            self.writeBlock(rBlock, cursor, db)
+        rBlock = self.reqLastBlock()
+        if rBlock and (rBlock.index > first):
+            last = rBlock.index
+            if (last-first) == 1:
+                self.writeBlock(rBlock, cursor)
+            else:
+                print 'requesting... ', first, 'to ', last
+                l = self.reqBlocks(first+1, last)
+                if  l:
+                    self.writeBlock(l, cursor)
             lastBlock_db = rBlock
             # set flag to request other blocks?
+            #self.synced = True
+        db.commit()
         db.close()
         return blockchain.Blockchain(lastBlock_db)
 
-    def reqrepServer(self, blockchain, kill, e, f, cons, threads):
-        self.repsocket.bind("tcp://127.0.0.1:9001")
-        while True:
-            try:
+    def sync(self, bchain):
+        # Sync with other nodes
+        sy = threading.Thread(target=self.reqrepServer,
+         kwargs={'blockchain': bchain})
+        sy.start()
+        return sy
+
+    def reqrepServer(self, blockchain):
+        db = sqlite3.connect('blocks/blockchain.db')
+        cursor = db.cursor()
+        self.bind(self.repsocket, port=self.port+1)
+        time.sleep(1)
+        while True and not self.k.is_set():
+            try: # TODO check this socket hanging
                 messages = self.repsocket.recv_multipart()
             except zmq.ContextTerminated:
                 break
-            time.sleep (1)
+            time.sleep(1)
+            cmd = messages[0]
+            if cmd == 'getlastblock':
+                self.repsocket.send_pyobj(blockchain.getLastBlock())
+            elif cmd == 'getblocks':
+                # check blocks in db
+                cursor.execute('SELECT * FROM blocks WHERE id BETWEEN ? AND ?', (messages[1],messages[2]))
+                l = cursor.fetchall()
+                self.repsocket.send_pyobj(l)
+            elif cmd == 'block':
+                # change to isolated function
+                cursor.execute('SELECT * FROM blocks WHERE id = ?', (messages[1],))
+                b = cursor.fetchone()
+                self.repsocket.send_pyobj(b)
+            else:
+                pass
+        db.close()
+
+    def rpcServer(self, blockchain):
+        db = sqlite3.connect('blocks/blockchain.db')
+        cursor = db.cursor()
+        self.bind(self.rpcsocket, ip='127.0.0.1', port=9999)
+        time.sleep(1)
+        while True:
+            try:
+                messages = self.rpcsocket.recv_multipart()
+            except zmq.ContextTerminated:
+                break
+            time.sleep(1)
             cmd = messages[0]
             if cmd == 'getlastblock':  
-                self.repsocket.send_pyobj(blockchain.getLastBlock())
+                self.rpcsocket.send_pyobj(blockchain.getLastBlock())
+            elif cmd == 'getblock':
+                cursor.execute('SELECT * FROM blocks WHERE id = ?', (messages[1],))
+                b = cursor.fetchone()
+                self.rpcsocket.send_pyobj(b)
+            elif cmd == 'getblocks':
+                idlist = messages[1:]
+                #idlist = [int(i) for i in messages[1:]]
+                cursor.execute('SELECT * FROM blocks WHERE id IN ({0})'.format(', '.join('?' for _ in idlist)), idlist)
+                b = cursor.fetchall()
+                self.rpcsocket.send_pyobj(b)
             elif cmd == 'addpeer':
                 m = self.addPeer(messages[1])
+                self.rpcsocket.send_string(m)
             elif cmd == 'removepeer':
                 m = self.removePeer(messages[1])
-                self.repsocket.send_string(m)
+                self.rpcsocket.send_string(m)
             elif cmd == 'getpeerinfo':
-                self.repsocket.send_pyobj(self.getPeers())
+                self.rpcsocket.send_pyobj(self.getPeers())
             elif cmd == 'startmining':
-                self.repsocket.send_string('Starting mining...')
-                f.set()
-                t = self.run(kill, e, f, blockchain, cons)
-                threads.append(t)
+                self.rpcsocket.send_string('Starting mining...')
+                self.start.set()
+                self.f.set()
             elif cmd == 'stopmining':
-                f.clear()
-                self.repsocket.send_string('Stopping mining...')
+                self.start.clear()
+                self.rpcsocket.send_string('Stopping mining...')
             elif cmd == 'exit':
-                self.repsocket.send_string('Exiting...')
-                raise StopException
+                self.rpcsocket.send_string('Exiting...')
                 #sys.exit(0)
+                raise StopException
             else:
+                self.rpcsocket.send_string('Command unknown')
                 print 'Command unknown'
+        db.close()
 
-    def reqrepClient(self):
-        self.reqsocket.connect("tcp://127.0.0.1:9001")
+# Client request-reply functions
+
+    def reqLastBlock(self):
         self.reqsocket.send("getlastblock")
         try:
-            b = self.reqsocket.recv_pyobj(zmq.NOBLOCK)
-            return b
-        except zmq.ZMQError:
+            evts = dict(self.poller.poll(5000))
+            print evts
+        except KeyboardInterrupt:
             return None
+        if self.reqsocket in evts and evts[self.reqsocket] == zmq.POLLIN:
+            b = self.reqsocket.recv_pyobj()
+            return b
+        else: # offline
+            return None
+
+    def reqBlock(self, index):
+        # TODO check zmq timeout
+        self.reqsocket.send_multipart(["block", index])
+        b = self.reqsocket.recv_pyobj()
+        return block.Block(b[0],b[2],b[4],b[3],b[1])
+
+    def reqBlocks(self, first, last):
+        self.reqsocket.send_multipart(["getblocks", str(first), str(last)])
+        try:
+            evts = dict(self.poller.poll(5000))
+            print evts
+        except KeyboardInterrupt:
+            return None
+        if self.reqsocket in evts and evts[self.reqsocket] == zmq.POLLIN:
+            b = self.reqsocket.recv_pyobj()
+            return b
+        else: # offline
+            return None
+
+    def exit(self, ip):
+        pass
+
 
 def main():
     # Argument and command-line options parsing
@@ -223,47 +348,69 @@ def main():
                         help='Specify listen port', default=9000)
     parser.add_argument('--peers', dest='peers', nargs='*',
                         help='Specify peers IP addresses', default=[])
+    parser.add_argument('--miner', dest='miner', action='store_true',
+                        help='Start the node immediately mining')
     args = parser.parse_args()
 
     threads = []
     cons = consensus.Consensus(5)
     n = Node(args.ipaddr, args.port)
-    # Flags and thread events
-    kill = threading.Event()
-    e = threading.Event()
-    f = threading.Event()
+
+    # Connect to predefined peers
+    if args.peers:
+        iplist = args.peers if isinstance(args.peers, list) else [args.peers]
+        for ipaddr in iplist:
+            n.addPeer(ipaddr)
+    else: # Connect to localhost
+        n.connect()
+    time.sleep(1)
+
+    #
 
     # Connect and check own node database
     bchain = n.dbConnect()
-    # Connect to predefined peers
-    if args.peers:
-        n.addPeer(args.peers)
-    else: # Connect to localhost
-        n.connect()
 
-    # Thread to listen after block messages
+    # Thread to listen request messages
+    t = n.sync(bchain)
+    threads.append(t)
+
+    # Thread to listen broadcast messages
     listen_thread = threading.Thread(target=n.listen,
-     kwargs={'k': kill, 'e': e, 'bchain': bchain})
+     kwargs={'bchain': bchain})
     listen_thread.start()
     #
-    n.bind()
+    n.bind(n.psocket)
+    time.sleep(1)
     #
+    # Maybe check last block again before mining
     # Miner thread
-    #threads = n.run(kill, e, bchain, cons)
-    # Exit main and threads
+    t = n.doConsensus(bchain, cons)
+    threads.append(t)
+    if args.miner:
+        n.start.set()
+        n.f.set()
+    # Main thread
     try:
         while True:
-            n.reqrepServer(bchain, kill, e, f, cons, threads)
+            # rpc-like commands
+            n.rpcServer(bchain)
+    # Exit main and threads
     except (KeyboardInterrupt, StopException):
         pass
     finally:
-        kill.set()
-        e.set()
-        f.set()
-        for t in threads:
-            t.join()
+        #n.exit(args.ipaddr)
+        n.k.set()
+        n.e.set()
+        n.f.set()
+        n.start.set()
+        #for t in threads:
+        #    t.join()
         n.close()
         print bchain.Info()
+        try: # TODO fix stucking on term or Assertion failed
+            n.ctx.term()
+        except KeyboardInterrupt:
+            pass
 
 if __name__ == '__main__':
     main()
