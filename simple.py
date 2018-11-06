@@ -16,7 +16,7 @@ def testHostWithPrivateDirs():
     "Test bind mounts"
     topo = SingleSwitchTopo( 3 )
     # change to pwd
-    privateDirs = privateDirs=[('/media/mininet/blockchain-simulator/blocks', '/media/mininet/blockchain-simulator/tmp/%(name)s/blocks'), '/tmp/log']
+    privateDirs = privateDirs=[('/media/mininet/blockchain-simulator/blocks', '/media/mininet/blockchain-simulator/tmp/%(name)s/blocks'), '/media/mininet/blockchain-simulator/tmp/log']
     host = partial( Host,
                     privateDirs=privateDirs )
     net = Mininet( topo=topo, host=host )

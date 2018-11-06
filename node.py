@@ -14,8 +14,8 @@ from collections import deque
 import logging
 
 #TODO blockchain class and database decision (move to only db solution)
-#TODO old peers subscribe to new peer?
-#TODO thread to check online REP servers before dbconnect
+#TODO old peers subscribe to new peer? [addr msg]
+#TODO better peer management and limit
 
 #TODO check python 3+ compatibility
 
@@ -44,11 +44,13 @@ class Node(object):
         self.subsocket.setsockopt(zmq.SUBSCRIBE, b'')
         self.poller.register(self.reqsocket, zmq.POLLIN)
         #self.reqsocket.RCVTIMEO = 3000 # in milliseconds
+        self.reqsocket.setsockopt(zmq.LINGER, 0)
+        self.reqsocket.setsockopt(zmq.REQ_RELAXED, 1)
         self.balance = 0
         self.stake = 0
         self.synced = False
         self.peers = deque()
-        # Flags and thread events
+        # Flags and thread events TODO pass some to consensus?
         self.k = threading.Event()
         self.e = threading.Event()
         self.f = threading.Event()
@@ -135,7 +137,7 @@ class Node(object):
         db = sqlite3.connect('blocks/blockchain.db')
         c = db.cursor()
         while True and not self.k.is_set():
-            #stop = self.e.is_set() # move e flag inside generate?
+            # move e flag inside generate?
             self.start.wait()
             self.f.wait()
             lastblock = bchain.getLastBlock()
@@ -148,6 +150,12 @@ class Node(object):
             else:
                 self.e.clear()
         db.close()
+
+    def doConsensus(self, bchain, cons):
+        m1 = threading.Thread(name='Miner',target=self.mine,
+         kwargs={'bchain': bchain, 'cons': cons})
+        m1.start()
+        return m1
 
     def writeBlock(self, b, c):
         try:
@@ -176,12 +184,6 @@ class Node(object):
         #else:
         #    return False
 
-    def doConsensus(self, bchain, cons):
-        m1 = threading.Thread(name='Miner',target=self.mine,
-         kwargs={'bchain': bchain, 'cons': cons})
-        m1.start()
-        return m1
-
     def dbConnect(self):
         db = sqlite3.connect('blocks/blockchain.db')
         cursor = db.cursor()
@@ -194,30 +196,44 @@ class Node(object):
         cursor.execute('SELECT * FROM blocks WHERE id = (SELECT MAX(id) FROM blocks)')
         # Last block from own database
         lastBlock_db = cursor.fetchone()
+        bc = blockchain.Blockchain(lastBlock_db)
         # Empty database
         if not lastBlock_db:
-            lastBlock_db = blockchain.Blockchain().getLastBlock()
-            first = 0
-            self.writeBlock(lastBlock_db, cursor)
-        else:
-            first = lastBlock_db[0]
-        # Last block from other nodes
-        rBlock = self.reqLastBlock()
-        if rBlock and (rBlock.index > first):
-            last = rBlock.index
+            genesis = bc.getLastBlock()
+            self.writeBlock(genesis, cursor)
+        db.commit()
+        db.close()
+        return bc
+
+    def sync(self, bc):
+        db = sqlite3.connect('blocks/blockchain.db')
+        cursor = db.cursor()
+        first = bc.getLastBlock().index
+        last = first
+        j=0
+        rBlock = None
+        for i in self.peers:
+            j+=1
+            logging.debug('request #%d' % j)
+            b = self.reqLastBlock()
+            if b:
+                logging.debug('Block index %s' % b.index)
+            if b and (b.index > last):
+                rBlock = b
+                last = rBlock.index
+        if rBlock:
             if (last-first) == 1:
                 self.writeBlock(rBlock, cursor)
             else:
-                logging.debug('requesting blocks %s to %s', first, last)
+                logging.debug('requesting blocks %s to %s', first+1, last)
                 l = self.reqBlocks(first+1, last)
                 if  l:
                     self.writeBlock(l, cursor)
-            lastBlock_db = rBlock
+            bc.addBlocktoBlockchain(rBlock)
             # set flag to request other blocks?
             #self.synced = True
         db.commit()
         db.close()
-        return blockchain.Blockchain(lastBlock_db)
 
     def messageHandler(self, bchain):
         # Sync with other nodes
@@ -241,6 +257,12 @@ class Node(object):
             self.repsocket.send_pyobj(reply)
         db.close()
 
+    def messageHandler(self, bchain):
+        t = threading.Thread(target=self.reqrepServer,
+         kwargs={'bc': bchain})
+        t.start()
+        return t
+
     def rpcServer(self, bc):
         db = sqlite3.connect('blocks/blockchain.db')
         cursor = db.cursor()
@@ -260,6 +282,7 @@ class Node(object):
                 b = cursor.fetchone()
                 self.rpcsocket.send_pyobj(b)
             elif cmd == 'getblocks':
+                # TODO check SQL query
                 idlist = messages[1:]
                 #idlist = [int(i) for i in messages[1:]]
                 cursor.execute('SELECT * FROM blocks WHERE id IN ({0})'.format(', '.join('?' for _ in idlist)), idlist)
@@ -301,7 +324,7 @@ class Node(object):
             b = self.reqsocket.recv_pyobj()
             return b
         else: # offline
-            logging.debug('empty pollin evt')
+            logging.debug('No response from node (empty pollin evt)')
             return None
 
     def reqBlock(self, index):
@@ -352,7 +375,7 @@ def main():
                         help='Set the logging output level {0}'.format(_LOG_LEVEL_STRINGS))
     args = parser.parse_args()
     
-    logging.basicConfig(filename='/tmp/log/example.log', filemode='w', level=logging.DEBUG,
+    logging.basicConfig(filename='tmp/log/example.log', filemode='w', level=logging.DEBUG,
         format='%(asctime)s %(levelname)s: %(message)s', datefmt='%d/%m/%Y %I:%M:%S')
     # set up logging to console
     console = logging.StreamHandler()
@@ -373,8 +396,6 @@ def main():
         n.connect()
     time.sleep(1)
 
-    #
-
     # Connect and check own node database
     bchain = n.dbConnect()
 
@@ -389,14 +410,18 @@ def main():
     #
     n.bind(n.psocket)
     time.sleep(1)
-    #
-    # Maybe check last block again before mining
+
+    # Check peers most recent block
+    n.sync(bchain)
+
     # Miner thread
     t = n.doConsensus(bchain, cons)
     threads.append(t)
+
     if args.miner:
         n.start.set()
         n.f.set()
+
     # Main thread
     try:
         while True:
