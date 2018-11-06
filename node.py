@@ -14,7 +14,6 @@ from collections import deque
 import logging
 
 #TODO blockchain class and database decision (move to only db solution)
-#TODO check for db error overwriting exception
 #TODO old peers subscribe to new peer?
 #TODO thread to check online REP servers before dbconnect
 
@@ -220,14 +219,14 @@ class Node(object):
         db.close()
         return blockchain.Blockchain(lastBlock_db)
 
-    def sync(self, bchain):
+    def messageHandler(self, bchain):
         # Sync with other nodes
-        sy = threading.Thread(target=self.reqrepServer,
+        t = threading.Thread(target=self.reqrepServer,
          kwargs={'blockchain': bchain})
-        sy.start()
-        return sy
+        t.start()
+        return t
 
-    def reqrepServer(self, blockchain):
+    def reqrepServer(self, bc):
         db = sqlite3.connect('blocks/blockchain.db')
         cursor = db.cursor()
         self.bind(self.repsocket, port=self.port+1)
@@ -237,25 +236,12 @@ class Node(object):
                 messages = self.repsocket.recv_multipart()
             except zmq.ContextTerminated:
                 break
-            time.sleep(1)
-            cmd = messages[0]
-            if cmd == 'getlastblock':
-                self.repsocket.send_pyobj(blockchain.getLastBlock())
-            elif cmd == 'getblocks':
-                # check blocks in db
-                cursor.execute('SELECT * FROM blocks WHERE id BETWEEN ? AND ?', (messages[1],messages[2]))
-                l = cursor.fetchall()
-                self.repsocket.send_pyobj(l)
-            elif cmd == 'block':
-                # change to isolated function
-                cursor.execute('SELECT * FROM blocks WHERE id = ?', (messages[1],))
-                b = cursor.fetchone()
-                self.repsocket.send_pyobj(b)
-            else:
-                pass
+            #time.sleep(1)
+            reply = consensus.handleMessages(bc, messages, cursor) 
+            self.repsocket.send_pyobj(reply)
         db.close()
 
-    def rpcServer(self, blockchain):
+    def rpcServer(self, bc):
         db = sqlite3.connect('blocks/blockchain.db')
         cursor = db.cursor()
         self.bind(self.rpcsocket, ip='127.0.0.1', port=9999)
@@ -268,7 +254,7 @@ class Node(object):
             time.sleep(1)
             cmd = messages[0]
             if cmd == 'getlastblock':  
-                self.rpcsocket.send_pyobj(blockchain.getLastBlock())
+                self.rpcsocket.send_pyobj(bc.getLastBlock())
             elif cmd == 'getblock':
                 cursor.execute('SELECT * FROM blocks WHERE id = ?', (messages[1],))
                 b = cursor.fetchone()
@@ -305,7 +291,7 @@ class Node(object):
 # Client request-reply functions
 
     def reqLastBlock(self):
-        self.reqsocket.send("getlastblock")
+        self.reqsocket.send(consensus.MSG_LASTBLOCK)
         try:
             evts = dict(self.poller.poll(5000))
             logging.debug('Requesting most recent block')
@@ -320,12 +306,12 @@ class Node(object):
 
     def reqBlock(self, index):
         # TODO check zmq timeout
-        self.reqsocket.send_multipart(["block", index])
+        self.reqsocket.send_multipart([consensus.MSG_BLOCK, index])
         b = self.reqsocket.recv_pyobj()
         return block.Block(b[0],b[2],b[4],b[3],b[1])
 
     def reqBlocks(self, first, last):
-        self.reqsocket.send_multipart(["getblocks", str(first), str(last)])
+        self.reqsocket.send_multipart([consensus.MSG_BLOCKS, str(first), str(last)])
         try:
             evts = dict(self.poller.poll(5000))
         except KeyboardInterrupt:
@@ -393,7 +379,7 @@ def main():
     bchain = n.dbConnect()
 
     # Thread to listen request messages
-    t = n.sync(bchain)
+    t = n.messageHandler(bchain)
     threads.append(t)
 
     # Thread to listen broadcast messages
