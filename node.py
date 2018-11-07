@@ -83,25 +83,25 @@ class Node(object):
         #self.ctx.term()
 
     def addPeer(self, ipaddr, port=9000):
-        peer = {'ipaddr': ipaddr}
+        peer = ipaddr if isinstance(ipaddr,collections.Mapping) else {'ipaddr': ipaddr}
         if peer not in self.peers:
             self.peers.appendleft(peer)
-            self.connect(d_ip=ipaddr,d_port=self.port)
-            return "Peer %s connected" % ipaddr
+            self.connect(d_ip=peer['ipaddr'],d_port=self.port)
+            return "Peer %s connected" % peer['ipaddr']
         else:
-            logging.warning("Peer %s already connected" % ipaddr)
-            return "Peer %s already connected" % ipaddr
+            logging.warning("Peer %s already connected" % peer['ipaddr'])
+            return "Peer %s already connected" % peer['ipaddr']
 
     def removePeer(self, ipaddr):
-        peer = {'ipaddr': ipaddr}
+        peer = ipaddr if isinstance(ipaddr,collections.Mapping) else {'ipaddr': ipaddr}
         try:
             self.peers.remove(peer)
-            self.disconnect(d_ip=ipaddr,d_port=self.port)
+            self.disconnect(d_ip=peer['ipaddr'],d_port=self.port)
             time.sleep(1)
         except ValueError:
-            logging.warning("Peer %s not connected" % ipaddr)
-            return "Peer %s not connected" % ipaddr
-        return "Peer %s removed" % ipaddr
+            logging.warning("Peer %s not connected" % peer['ipaddr'])
+            return "Peer %s not connected" % peer['ipaddr']
+        return "Peer %s removed" % peer['ipaddr']
 
     def getPeers(self):
         return self.peers
@@ -119,7 +119,6 @@ class Node(object):
                 self.f.clear()
                 b = pickle.loads(block_recv)
                 logging.info("Got block %s" % b.hash)
-                #logging.info(b.hash)
                 # Verify block
                 if bchain.getLastBlock().index < b.index:
                     self.writeBlock(b, c)
@@ -143,6 +142,7 @@ class Node(object):
             lastblock = bchain.getLastBlock()
             b = cons.generateNewblock(lastblock,self.e)
             if b and not self.e.is_set():
+                logging.info("Mined block %s" % b.hash)
                 self.writeBlock(b, c)
                 bchain.addBlocktoBlockchain(b)
                 self.psocket.send_multipart(['block', pickle.dumps(b, 2)])
@@ -170,7 +170,6 @@ class Node(object):
                         b.__dict__['nonce']))
         except sqlite3.IntegrityError:
             logging.warning('db insert duplicated block')
-        #db.commit()
 
     def readBlock(self):
         pass
@@ -205,33 +204,35 @@ class Node(object):
         db.close()
         return bc
 
+    def probe(self):
+        for i in self.peers:
+            x = self.hello()
+            if not x:
+                self.removePeer(i)
+
     def sync(self, bc):
         db = sqlite3.connect('blocks/blockchain.db')
         cursor = db.cursor()
-        first = bc.getLastBlock().index
-        last = first
-        j=0
+        first = last = bc.getLastBlock().index
         rBlock = None
-        for i in self.peers:
-            j+=1
-            logging.debug('request #%d' % j)
+        # limit number of peers?
+        for i in range(0,min(len(self.peers),3)):
+            i+=1
+            logging.debug('request #%d' % i)
             b = self.reqLastBlock()
             if b:
                 logging.debug('Block index %s' % b.index)
             if b and (b.index > last):
                 rBlock = b
                 last = rBlock.index
-        if rBlock:
+        if rBlock and (last > first):
             if (last-first) == 1:
                 self.writeBlock(rBlock, cursor)
             else:
-                logging.debug('requesting blocks %s to %s', first+1, last)
                 l = self.reqBlocks(first+1, last)
                 if  l:
                     self.writeBlock(l, cursor)
             bc.addBlocktoBlockchain(rBlock)
-            # set flag to request other blocks?
-            #self.synced = True
         db.commit()
         db.close()
 
@@ -253,7 +254,8 @@ class Node(object):
             except zmq.ContextTerminated:
                 break
             #time.sleep(1)
-            reply = consensus.handleMessages(bc, messages, cursor) 
+            reply = consensus.handleMessages(bc, messages, cursor)
+            # TODO message multipart
             self.repsocket.send_pyobj(reply)
         db.close()
 
@@ -282,7 +284,7 @@ class Node(object):
                 b = cursor.fetchone()
                 self.rpcsocket.send_pyobj(b)
             elif cmd == 'getblocks':
-                # TODO check SQL query
+                # TODO add SQL query BETWEEN
                 idlist = messages[1:]
                 #idlist = [int(i) for i in messages[1:]]
                 cursor.execute('SELECT * FROM blocks WHERE id IN ({0})'.format(', '.join('?' for _ in idlist)), idlist)
@@ -313,44 +315,37 @@ class Node(object):
 
 # Client request-reply functions
 
-    def reqLastBlock(self):
-        self.reqsocket.send(consensus.MSG_LASTBLOCK)
+    def poll(self):
         try:
             evts = dict(self.poller.poll(5000))
-            logging.debug('Requesting most recent block')
         except KeyboardInterrupt:
             return None
         if self.reqsocket in evts and evts[self.reqsocket] == zmq.POLLIN:
-            b = self.reqsocket.recv_pyobj()
-            return b
-        else: # offline
+            # TODO multipart messages?
+            return self.reqsocket.recv_pyobj()
+        else:
             logging.debug('No response from node (empty pollin evt)')
             return None
 
+    def reqLastBlock(self):
+        self.reqsocket.send(consensus.MSG_LASTBLOCK)
+        logging.debug('Requesting most recent block')
+        return block.dbtoBlock(self.poll())
+
     def reqBlock(self, index):
-        # TODO check zmq timeout
-        self.reqsocket.send_multipart([consensus.MSG_BLOCK, index])
-        b = self.reqsocket.recv_pyobj()
-        return block.Block(b[0],b[2],b[4],b[3],b[1])
+        self.reqsocket.send_multipart([consensus.MSG_BLOCK, str(index)])
+        logging.debug('Requesting block index %s' % index)
+        return block.dbtoBlock(self.poll())
 
     def reqBlocks(self, first, last):
         self.reqsocket.send_multipart([consensus.MSG_BLOCKS, str(first), str(last)])
-        try:
-            evts = dict(self.poller.poll(5000))
-        except KeyboardInterrupt:
-            return None
-        if self.reqsocket in evts and evts[self.reqsocket] == zmq.POLLIN:
-            b = self.reqsocket.recv_pyobj()
-            return b
-        else: # offline
-            logging.debug('empty pollin evt')
-            return None
-
-    def exit(self, ip):
-        pass
+        logging.debug('Requesting blocks %s to %s', first+1, last)
+        return self.poll()
 
     def hello(self):
-        pass
+        self.reqsocket.send_multipart([consensus.MSG_HELLO,])
+        logging.debug('Probing peer alive')
+        return self.poll()
 
 _LOG_LEVEL_STRINGS = ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG']
 

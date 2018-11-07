@@ -24,3 +24,9 @@ class Block:
     
     def blockInfo(self):
         return json.dumps(self.rawblockInfo(), indent=4)
+
+def dbtoBlock(b):
+    if isinstance(b, Block) or b is None:
+        return b
+    else:
+        return Block(b[0],b[2],b[4],b[3],b[1])

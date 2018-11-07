@@ -9,11 +9,14 @@ import sqlite3
 MSG_LASTBLOCK = 'getlastblock'
 MSG_BLOCK = 'block'
 MSG_BLOCKS = 'getblocks'
+MSG_HELLO = 'hello'
 
 def handleMessages(bc, messages, cursor):
     cmd = messages[0].lower() # test if str?
     if cmd == MSG_LASTBLOCK:
         return bc.getLastBlock()
+    elif cmd == MSG_HELLO:
+        return MSG_HELLO
     elif cmd == MSG_BLOCKS:
         # check blocks in db
         cursor.execute('SELECT * FROM blocks WHERE id BETWEEN ? AND ?', (messages[1],messages[2]))
