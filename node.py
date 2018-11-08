@@ -8,7 +8,7 @@ import argparse
 import block
 import blockchain
 import consensus
-import sqlite3
+import sqldb
 import pickle
 from collections import deque
 import logging
@@ -110,8 +110,6 @@ class Node(object):
         self.balance = value
 
     def listen(self, bchain):
-        db = sqlite3.connect('blocks/blockchain.db')
-        c = db.cursor()
         while True and not self.k.is_set():
             try:
                 msg, block_recv = self.subsocket.recv_multipart()
@@ -121,20 +119,16 @@ class Node(object):
                 logging.info("Got block %s" % b.hash)
                 # Verify block
                 if bchain.getLastBlock().index < b.index:
-                    self.writeBlock(b, c)
+                    sqldb.writeBlock(b)
                     bchain.addBlocktoBlockchain(b)
-                    db.commit()
                 #
                 self.f.set()
             except (zmq.ContextTerminated):
                 break
-        db.close()
 
     def mine(self, bchain, cons):
         # target = 2 ** (20) - 1
         name = threading.current_thread().getName()
-        db = sqlite3.connect('blocks/blockchain.db')
-        c = db.cursor()
         while True and not self.k.is_set():
             # move e flag inside generate?
             self.start.wait()
@@ -143,33 +137,17 @@ class Node(object):
             b = cons.generateNewblock(lastblock,self.e)
             if b and not self.e.is_set():
                 logging.info("Mined block %s" % b.hash)
-                self.writeBlock(b, c)
+                sqldb.writeBlock(b)
                 bchain.addBlocktoBlockchain(b)
                 self.psocket.send_multipart(['block', pickle.dumps(b, 2)])
-                db.commit()
             else:
                 self.e.clear()
-        db.close()
 
     def doConsensus(self, bchain, cons):
         m1 = threading.Thread(name='Miner',target=self.mine,
          kwargs={'bchain': bchain, 'cons': cons})
         m1.start()
         return m1
-
-    def writeBlock(self, b, c):
-        try:
-            if isinstance(b, list):
-                c.executemany('INSERT INTO blocks VALUES (?,?,?,?,?)', b)
-            else:
-                c.execute('INSERT INTO blocks VALUES (?,?,?,?,?)', (
-                        b.__dict__['index'],
-                        b.__dict__['timestamp'],
-                        b.__dict__['prev_hash'],
-                        b.__dict__['hash'],
-                        b.__dict__['nonce']))
-        except sqlite3.IntegrityError:
-            logging.warning('db insert duplicated block')
 
     def readBlock(self):
         pass
@@ -183,27 +161,6 @@ class Node(object):
         #else:
         #    return False
 
-    def dbConnect(self):
-        db = sqlite3.connect('blocks/blockchain.db')
-        cursor = db.cursor()
-        cursor.execute("""CREATE TABLE IF NOT EXISTS blocks (
-            id integer primary key, 
-            ctime text, 
-            phash text, 
-            hash text, 
-            nonce integer)""")
-        cursor.execute('SELECT * FROM blocks WHERE id = (SELECT MAX(id) FROM blocks)')
-        # Last block from own database
-        lastBlock_db = cursor.fetchone()
-        bc = blockchain.Blockchain(lastBlock_db)
-        # Empty database
-        if not lastBlock_db:
-            genesis = bc.getLastBlock()
-            self.writeBlock(genesis, cursor)
-        db.commit()
-        db.close()
-        return bc
-
     def probe(self):
         for i in self.peers:
             x = self.hello()
@@ -211,8 +168,6 @@ class Node(object):
                 self.removePeer(i)
 
     def sync(self, bc):
-        db = sqlite3.connect('blocks/blockchain.db')
-        cursor = db.cursor()
         first = last = bc.getLastBlock().index
         rBlock = None
         # limit number of peers?
@@ -227,14 +182,12 @@ class Node(object):
                 last = rBlock.index
         if rBlock and (last > first):
             if (last-first) == 1:
-                self.writeBlock(rBlock, cursor)
+                sqldb.writeBlock(rBlock)
             else:
                 l = self.reqBlocks(first+1, last)
                 if  l:
-                    self.writeBlock(l, cursor)
+                    sqldb.writeBlock(l)
             bc.addBlocktoBlockchain(rBlock)
-        db.commit()
-        db.close()
 
     def messageHandler(self, bchain):
         # Sync with other nodes
@@ -244,8 +197,6 @@ class Node(object):
         return t
 
     def reqrepServer(self, bc):
-        db = sqlite3.connect('blocks/blockchain.db')
-        cursor = db.cursor()
         self.bind(self.repsocket, port=self.port+1)
         time.sleep(1)
         while True and not self.k.is_set():
@@ -254,10 +205,9 @@ class Node(object):
             except zmq.ContextTerminated:
                 break
             #time.sleep(1)
-            reply = consensus.handleMessages(bc, messages, cursor)
+            reply = consensus.handleMessages(bc, messages)
             # TODO message multipart
             self.repsocket.send_pyobj(reply)
-        db.close()
 
     def messageHandler(self, bchain):
         t = threading.Thread(target=self.reqrepServer,
@@ -266,8 +216,6 @@ class Node(object):
         return t
 
     def rpcServer(self, bc):
-        db = sqlite3.connect('blocks/blockchain.db')
-        cursor = db.cursor()
         self.bind(self.rpcsocket, ip='127.0.0.1', port=9999)
         time.sleep(1)
         while True:
@@ -311,7 +259,6 @@ class Node(object):
             else:
                 self.rpcsocket.send_string('Command unknown')
                 logging.warning('Command unknown')
-        db.close()
 
 # Client request-reply functions
 
@@ -347,6 +294,8 @@ class Node(object):
         logging.debug('Probing peer alive')
         return self.poll()
 
+# Main program
+
 _LOG_LEVEL_STRINGS = ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG']
 
 def _log_level_to_int(loglevel):
@@ -378,6 +327,7 @@ def main():
     logging.getLogger('').addHandler(console)
 
     threads = []
+    #sqldb.databaseLocation = 'blocks/blockchain.db'
     cons = consensus.Consensus(5)
     n = Node(args.ipaddr, args.port)
 
@@ -392,7 +342,7 @@ def main():
     time.sleep(1)
 
     # Connect and check own node database
-    bchain = n.dbConnect()
+    bchain = sqldb.dbCheck()
 
     # Thread to listen request messages
     t = n.messageHandler(bchain)

@@ -4,27 +4,23 @@ import hashlib
 import datetime
 import threading
 import blockchain
-import sqlite3
+import sqldb
 
 MSG_LASTBLOCK = 'getlastblock'
 MSG_BLOCK = 'block'
 MSG_BLOCKS = 'getblocks'
 MSG_HELLO = 'hello'
 
-def handleMessages(bc, messages, cursor):
+def handleMessages(bc, messages):
     cmd = messages[0].lower() # test if str?
     if cmd == MSG_LASTBLOCK:
         return bc.getLastBlock()
     elif cmd == MSG_HELLO:
         return MSG_HELLO
     elif cmd == MSG_BLOCKS:
-        # check blocks in db
-        cursor.execute('SELECT * FROM blocks WHERE id BETWEEN ? AND ?', (messages[1],messages[2]))
-        return cursor.fetchall()
+        return sqldb.blocksQuery()
     elif cmd == MSG_BLOCK:
-        # change to isolated function
-        cursor.execute('SELECT * FROM blocks WHERE id = ?', (messages[1],))
-        return cursor.fetchone()
+        return sqldb.blockQuery()
     else:
         return None
 
