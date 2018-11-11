@@ -29,7 +29,7 @@ Simple single switch Mininet topology that runs `node.py` in each host with priv
 **Arguments:**
 - number of hosts on switch (*pending*)
 
-## rpcclient.py
+## rpc/rpcclient.py
 
 Localhost client to communicate with the node process and obtain blockchain info
 

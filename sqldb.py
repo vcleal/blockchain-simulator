@@ -12,6 +12,7 @@ def dbConnect():
 def dbCheck():
     db = sqlite3.connect(databaseLocation)
     cursor = db.cursor()
+    logging.info('checking database')
     cursor.execute("""CREATE TABLE IF NOT EXISTS blocks (
         id integer primary key, 
         ctime text, 
@@ -51,7 +52,15 @@ def writeBlock(b):
         db.commit()
         db.close()
 
-def blocksQuery():
+def blockQuery(messages):
+    db = sqlite3.connect(databaseLocation)
+    cursor = db.cursor()
+    cursor.execute('SELECT * FROM blocks WHERE id = ?', (messages[1],))
+    b = cursor.fetchone()
+    db.close()
+    return b
+
+def blocksQuery(messages):
     db = sqlite3.connect(databaseLocation)
     cursor = db.cursor()
     cursor.execute('SELECT * FROM blocks WHERE id BETWEEN ? AND ?', (messages[1],messages[2]))
@@ -59,10 +68,12 @@ def blocksQuery():
     db.close()
     return l
 
-def blockQuery():
+def blocksListQuery(messages):
     db = sqlite3.connect(databaseLocation)
     cursor = db.cursor()
-    cursor.execute('SELECT * FROM blocks WHERE id = ?', (messages[1],))
-    b = cursor.fetchone()
+    idlist = messages[1:]
+    #idlist = [int(i) for i in messages[1:]]
+    cursor.execute('SELECT * FROM blocks WHERE id IN ({0})'.format(', '.join('?' for _ in idlist)), idlist)
+    l = cursor.fetchall()
     db.close()
-    return b
+    return l

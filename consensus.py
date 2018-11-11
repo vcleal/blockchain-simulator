@@ -18,9 +18,9 @@ def handleMessages(bc, messages):
     elif cmd == MSG_HELLO:
         return MSG_HELLO
     elif cmd == MSG_BLOCKS:
-        return sqldb.blocksQuery()
+        return sqldb.blocksQuery(messages)
     elif cmd == MSG_BLOCK:
-        return sqldb.blockQuery()
+        return sqldb.blockQuery(messages)
     else:
         return None
 

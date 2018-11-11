@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 
 import zmq
-import block
 import sys
+from messages import *
 
 #TODO argparse and real rpc?
 
@@ -15,35 +15,35 @@ if __name__ == '__main__':
     reqsocket.connect("tcp://127.0.0.1:9999")
     if len(sys.argv) >= 2:
         try:
-            if 'getlastblock' == sys.argv[1]:
+            if MSG_LASTBLOCK == sys.argv[1]:
                 reqsocket.send(sys.argv[1])
-                b = reqsocket.recv_pyobj()
-                print b.blockInfo()
-            elif 'addpeer' == sys.argv[1]:
+                b = reqsocket.recv()
+                print b
+            elif MSG_ADD == sys.argv[1]:
                 reqsocket.send_multipart([sys.argv[1], sys.argv[2]])
                 print reqsocket.recv_string()
-            elif 'removepeer' == sys.argv[1]:
+            elif MSG_REMOVE == sys.argv[1]:
                 reqsocket.send_multipart([sys.argv[1], sys.argv[2]])
                 print reqsocket.recv_string()
-            elif 'getblock' == sys.argv[1]:
+            elif MSG_BLOCK == sys.argv[1]:
                 reqsocket.send_multipart([sys.argv[1], sys.argv[2]])
-                b = reqsocket.recv_pyobj()
-                print block.Block(b[0],b[2],b[4],b[3],b[1]).blockInfo()
-            elif 'getblocks' == sys.argv[1]:
+                b = reqsocket.recv()
+                print b
+            elif MSG_BLOCKS == sys.argv[1]:
                 reqsocket.send_multipart(sys.argv[1:])
                 l = reqsocket.recv_pyobj()
                 for b in l:
-                    print block.Block(b[0],b[2],b[4],b[3],b[1]).blockInfo()
-            elif 'getpeerinfo' == sys.argv[1]:
+                    print b
+            elif MSG_PEERS == sys.argv[1]:
                 reqsocket.send(sys.argv[1])
                 print reqsocket.recv_pyobj()
-            elif 'startmining' == sys.argv[1]:
+            elif MSG_START == sys.argv[1]:
                 reqsocket.send(sys.argv[1])
                 print reqsocket.recv_string()
-            elif 'stopmining' == sys.argv[1]:
+            elif MSG_STOP == sys.argv[1]:
                 reqsocket.send(sys.argv[1])
                 print reqsocket.recv_string()
-            elif 'exit' == sys.argv[1]:
+            elif MSG_EXIT == sys.argv[1]:
                 reqsocket.send(sys.argv[1])
                 print reqsocket.recv_string()
             else:
