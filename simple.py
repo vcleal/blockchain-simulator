@@ -15,7 +15,8 @@ from signal import SIGINT
 def testHostWithPrivateDirs():
     "Test bind mounts"
     topo = SingleSwitchTopo( 3 )
-    privateDirs = privateDirs=[('/media/mininet/blockchain-simulator/blocks', '/media/mininet/blockchain-simulator/tmp/%(name)s/blocks')]
+    # change to pwd
+    privateDirs = privateDirs=[('/media/mininet/blockchain-simulator/blocks', '/media/mininet/blockchain-simulator/tmp/%(name)s/blocks'), '/media/mininet/blockchain-simulator/tmp/log']
     host = partial( Host,
                     privateDirs=privateDirs )
     net = Mininet( topo=topo, host=host )

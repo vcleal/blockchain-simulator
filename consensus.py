@@ -3,8 +3,30 @@ import random
 import hashlib
 import datetime
 import threading
+import blockchain
+import sqlite3
+
+MSG_LASTBLOCK = 'getlastblock'
+MSG_BLOCK = 'block'
+MSG_BLOCKS = 'getblocks'
+
+def handleMessages(bc, messages, cursor):
+    cmd = messages[0].lower() # test if str?
+    if cmd == MSG_LASTBLOCK:
+        return bc.getLastBlock()
+    elif cmd == MSG_BLOCKS:
+        # check blocks in db
+        cursor.execute('SELECT * FROM blocks WHERE id BETWEEN ? AND ?', (messages[1],messages[2]))
+        return cursor.fetchall()
+    elif cmd == MSG_BLOCK:
+        # change to isolated function
+        cursor.execute('SELECT * FROM blocks WHERE id = ?', (messages[1],))
+        return cursor.fetchone()
+    else:
+        return None
 
 class Consensus:
+
     def __init__(self, difficulty):
         self.difficulty = difficulty
         self.type = "PoW"
@@ -12,7 +34,7 @@ class Consensus:
         self.target = 2 ** (4 * self.difficulty) - 1
     
     def POW(self, lastBlock, stop):
-        # chr simplifies merkle root
+        # chr simplifies merkle root and add randomness
         timestamp = str(datetime.datetime.now())
         header = chr(random.randint(1,100)) + str(lastBlock.index + 1) + str(lastBlock.hash) + timestamp
         for nonce in xrange(self.MAX_NONCE):
@@ -24,6 +46,7 @@ class Consensus:
                 return hash_result, nonce, timestamp
         return False, nonce, timestamp
    
+
     def validateBlock(self, lastBlock, Block):
         #if self.isuniqueindex(Block):
         return NotImplemented
