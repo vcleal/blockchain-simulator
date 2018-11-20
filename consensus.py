@@ -14,7 +14,7 @@ MSG_HELLO = 'hello'
 def handleMessages(bc, messages):
     cmd = messages[0].lower() # test if str?
     if cmd == MSG_LASTBLOCK:
-        return bc.getLastBlock()
+        return bc.getLastBlock() # sql query?
     elif cmd == MSG_HELLO:
         return MSG_HELLO
     elif cmd == MSG_BLOCKS:
