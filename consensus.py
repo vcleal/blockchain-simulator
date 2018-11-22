@@ -12,7 +12,8 @@ MSG_BLOCKS = 'getblocks'
 MSG_HELLO = 'hello'
 
 def handleMessages(bc, messages):
-    cmd = messages[0].lower() # test if str?
+    cmd = messages[0] if isinstance(messages, list) else str(messages)
+    cmd = cmd.lower()
     if cmd == MSG_LASTBLOCK:
         return bc.getLastBlock() # sql query?
     elif cmd == MSG_HELLO:
@@ -31,10 +32,24 @@ def validateBlockHeader(b):
     return False
 
 def validateBlock(block, lastBlock):
-	# check chain
+	# check block chaining
 	if block.prev_hash == lastBlock.hash:
 		return True
 	return False
+
+def validateChain(bc, l):
+    lastBlock = bc.getLastBlock()
+    for b in l:
+        b = sqldb.dbtoBlock(b)
+        # validade block header ?
+        #validateBlockHeader(b)
+        if validateBlock(b, lastBlock):
+            lastBlock = b
+            bc.addBlocktoBlockchain(b)
+            sqldb.writeBlock(b)
+        else:
+            return b
+    return None
 
 class Consensus:
 
