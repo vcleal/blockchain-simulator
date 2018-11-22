@@ -7,19 +7,31 @@ import blockchain
 databaseLocation = 'blocks/blockchain.db'
 
 def dbConnect():
-    pass
-
-def dbCheck():
     db = sqlite3.connect(databaseLocation)
     cursor = db.cursor()
-    logging.info('checking database')
     cursor.execute("""CREATE TABLE IF NOT EXISTS blocks (
         id integer primary key, 
         ctime text, 
         phash text, 
         hash text, 
         nonce integer,
-        mroot text)""")
+        mroot text,
+        tx text)""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS branches (
+        id integer, 
+        ctime text, 
+        phash text, 
+        hash text, 
+        nonce integer,
+        mroot text,
+        tx text,
+        FOREIGN KEY(id) REFERENCES blocks(id))""")
+    db.commit()
+    db.close()
+
+def dbCheck():
+    db = sqlite3.connect(databaseLocation)
+    cursor = db.cursor()
     cursor.execute('SELECT * FROM blocks WHERE id = (SELECT MAX(id) FROM blocks)')
     # Last block from own database
     lastBlock_db = cursor.fetchone()

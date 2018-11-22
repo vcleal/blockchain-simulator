@@ -327,6 +327,8 @@ def main():
     time.sleep(1)
 
     # Connect and check own node database
+    logging.info('checking database')
+    sqldb.dbConnect()
     n.bchain = sqldb.dbCheck()
 
     # Thread to listen request messages
