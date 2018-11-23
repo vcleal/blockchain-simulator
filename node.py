@@ -123,10 +123,10 @@ class Node(object):
         self.bind(self.psocket)
         while True and not self.k.is_set():
             try:
-                msg, block_recv = self.subsocket.recv_multipart()
+                msg, ip, block_recv = self.subsocket.recv_multipart()
                 self.f.clear()
                 b = pickle.loads(block_recv)
-                logging.info("Got block %s" % b.hash)
+                logging.info("Got block %s miner %s" % (b.hash, ip))
                 # Verify block
                 if consensus.validateBlockHeader(b):
                     logging.debug('valid block')
@@ -136,20 +136,22 @@ class Node(object):
                         sqldb.writeBlock(b)
                         self.bchain.addBlocktoBlockchain(b)
                         # rebroadcast
-                        logging.debug('rebroadcast')
-                        self.psocket.send_multipart([consensus.MSG_BLOCK, pickle.dumps(b, 2)])
+                        #logging.debug('rebroadcast')
+                        self.psocket.send_multipart([consensus.MSG_BLOCK, ip, pickle.dumps(b, 2)])
                     elif b.index - lb.index > 1:
                         self.synced = False
-                        self.sync(b)
+                        self.sync(b, ip)
                     elif b.index == lb.index:
                         if b.hash == lb.hash:
                             logging.debug('retransmission')
                             pass
                         else:
                             #fork
+                            logging.debug('strong fork')
                             pass
                     else:
                         #fork
+                        logging.debug('weak fork')
                         pass
                 #
                 self.f.set()
@@ -169,7 +171,7 @@ class Node(object):
                 logging.info("Mined block %s" % b.hash)
                 sqldb.writeBlock(b)
                 self.bchain.addBlocktoBlockchain(b)
-                self.psocket.send_multipart([consensus.MSG_BLOCK, pickle.dumps(b, 2)])
+                self.psocket.send_multipart([consensus.MSG_BLOCK, self.ipaddr, pickle.dumps(b, 2)])
             else:
                 self.e.clear()
 
@@ -182,7 +184,7 @@ class Node(object):
             if not x:
                 self.removePeer(i)
 
-    def sync(self, rBlock=None):
+    def sync(self, rBlock=None, address=None):
         # TODO change variables names and test again
         self.synced = True
         logging.debug('syncing...')
@@ -209,12 +211,12 @@ class Node(object):
                 self.bchain.addBlocktoBlockchain(rBlock)
             else:
                 l = self.reqBlocks(address, last.index+1, rBlock.index)
-                print l
                 if  l:
                     # validate here
                     error = consensus.validateChain(self.bchain, l)
                     if error:
-                        logging.warning('block %s invalid', % b.index)
+                        # maybe fork, request previous
+                        logging.debug('fork')
                         # sync again?
                     #sqldb.writeBlock(l)
         logging.debug('synced')
@@ -244,6 +246,9 @@ class Node(object):
             if cmd == rpc.MSG_LASTBLOCK:
                 b = self.bchain.getLastBlock()
                 self.rpcsocket.send(b.blockInfo())
+            elif cmd == rpc.MSG_BLOCKCHAIN:
+                b = self.bchain.Info()
+                self.rpcsocket.send(b)
             elif cmd == rpc.MSG_BLOCK:
                 b = sqldb.dbtoBlock(sqldb.blockQuery(messages))
                 self.rpcsocket.send(b.blockInfo() if b else 'error')
@@ -288,7 +293,7 @@ class Node(object):
             return None, None
         if s in evts and evts[s] == zmq.POLLIN:
             m = s.recv_multipart()
-            logging.debug(m[-2])
+            #logging.debug(m[-2])
             return pickle.loads(m[-1]), m[-2]
         else:
             logging.debug('No response from node (empty pollin evt)')

@@ -39,15 +39,18 @@ def validateBlock(block, lastBlock):
 
 def validateChain(bc, l):
     lastBlock = bc.getLastBlock()
+    #print lastBlock.blockInfo()
     for b in l:
-        b = sqldb.dbtoBlock(b)
+        #print b
+        b = sqldb.dbtoBlock(b)  # maybe avoid converting
         # validade block header ?
         #validateBlockHeader(b)
         if validateBlock(b, lastBlock):
             lastBlock = b
             bc.addBlocktoBlockchain(b)
             sqldb.writeBlock(b)
-        else:
+        else: # fork
+            #sqldb.writeFork(b)
             return b
     return None
 

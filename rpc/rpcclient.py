@@ -4,7 +4,7 @@ import zmq
 import sys
 from messages import *
 
-#TODO argparse and real rpc?
+#TODO argparse
 
 if __name__ == '__main__':
     ctx = zmq.Context.instance()
@@ -16,6 +16,10 @@ if __name__ == '__main__':
     if len(sys.argv) >= 2:
         try:
             if MSG_LASTBLOCK == sys.argv[1]:
+                reqsocket.send(sys.argv[1])
+                b = reqsocket.recv()
+                print b
+            elif MSG_BLOCKCHAIN == sys.argv[1]:
                 reqsocket.send(sys.argv[1])
                 b = reqsocket.recv()
                 print b

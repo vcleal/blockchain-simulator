@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 MSG_LASTBLOCK = 'getlastblock'
+MSG_BLOCKCHAIN = 'getblockchain'
 MSG_BLOCK = 'getblock'
 MSG_BLOCKS = 'getblocks'
 MSG_HELLO = 'hello'
