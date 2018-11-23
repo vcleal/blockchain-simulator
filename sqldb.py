@@ -91,7 +91,7 @@ def blocksListQuery(messages):
     cursor.execute('SELECT * FROM blocks WHERE id IN ({0})'.format(', '.join('?' for _ in idlist)), idlist)
     l = cursor.fetchall()
     db.close()
-    return 
+    return l
 
 def dbtoBlock(b):
     if isinstance(b, block.Block) or b is None:

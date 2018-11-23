@@ -10,14 +10,16 @@ import blockchain
 import consensus
 import sqldb
 import pickle
-from collections import deque
+from collections import deque, Mapping
 import logging
 import rpc.messages as rpc
 
 #TODO blockchain class and database decision (move to only db solution)
 #TODO old peers subscribe to new peer? [addr msg]
-#TODO better peer management and limit
-#TODO zmq.ROUTER type socket for REQ/REP
+#TODO better peer management and limit (use a p2p library - pyre?)
+#TODO zmq.ROUTER type socket for REQ/REP?
+#TODO connect only on request?
+#TODO serialization/deserialization, change pickle to json?
 
 #TODO check python 3+ compatibility
 
@@ -40,11 +42,14 @@ class Node(object):
         self.poller = zmq.Poller()
         self.reqsocket = self.ctx.socket(zmq.REQ)
         self.repsocket = self.ctx.socket(zmq.REP)
+        self.router = self.ctx.socket(zmq.REQ)
         self.rpcsocket = self.ctx.socket(zmq.REP)
         self.psocket = self.ctx.socket(zmq.PUB)
         self.subsocket = self.ctx.socket(zmq.SUB)
+        # TODO add 'block' subscription type
         self.subsocket.setsockopt(zmq.SUBSCRIBE, b'')
         self.poller.register(self.reqsocket, zmq.POLLIN)
+        self.poller.register(self.router, zmq.POLLIN)
         #self.reqsocket.RCVTIMEO = 3000 # in milliseconds
         #self.reqsocket.setsockopt(zmq.LINGER, 0)
         self.reqsocket.setsockopt(zmq.REQ_RELAXED, 1)
@@ -83,10 +88,12 @@ class Node(object):
         self.repsocket.close(linger=0)
         self.rpcsocket.close(linger=0)
         self.reqsocket.close(linger=0)
+        self.router.close(linger=0)
         self.ctx.term()
 
     def addPeer(self, ipaddr, port=9000):
-        peer = ipaddr if isinstance(ipaddr,collections.Mapping) else {'ipaddr': ipaddr}
+        # TODO remove port
+        peer = ipaddr if isinstance(ipaddr,Mapping) else {'ipaddr': ipaddr}
         if peer not in self.peers:
             self.peers.appendleft(peer)
             self.connect(d_ip=peer['ipaddr'],d_port=self.port)
@@ -96,7 +103,7 @@ class Node(object):
             return "Peer %s already connected" % peer['ipaddr']
 
     def removePeer(self, ipaddr):
-        peer = ipaddr if isinstance(ipaddr,collections.Mapping) else {'ipaddr': ipaddr}
+        peer = ipaddr if isinstance(ipaddr,Mapping) else {'ipaddr': ipaddr}
         try:
             self.peers.remove(peer)
             self.disconnect(d_ip=peer['ipaddr'],d_port=self.port)
@@ -113,17 +120,39 @@ class Node(object):
         self.balance = value
 
     def listen(self):
+        self.bind(self.psocket)
         while True and not self.k.is_set():
             try:
-                msg, block_recv = self.subsocket.recv_multipart()
-                self.e.set()
+                msg, ip, block_recv = self.subsocket.recv_multipart()
                 self.f.clear()
                 b = pickle.loads(block_recv)
-                logging.info("Got block %s" % b.hash)
+                logging.info("Got block %s miner %s" % (b.hash, ip))
                 # Verify block
-                if self.bchain.getLastBlock().index < b.index:
-                    sqldb.writeBlock(b)
-                    self.bchain.addBlocktoBlockchain(b)
+                if consensus.validateBlockHeader(b):
+                    logging.debug('valid block')
+                    lb = self.bchain.getLastBlock()
+                    if (b.index - lb.index == 1) and consensus.validateBlock(b, lb):
+                        self.e.set()
+                        sqldb.writeBlock(b)
+                        self.bchain.addBlocktoBlockchain(b)
+                        # rebroadcast
+                        #logging.debug('rebroadcast')
+                        self.psocket.send_multipart([consensus.MSG_BLOCK, ip, pickle.dumps(b, 2)])
+                    elif b.index - lb.index > 1:
+                        self.synced = False
+                        self.sync(b, ip)
+                    elif b.index == lb.index:
+                        if b.hash == lb.hash:
+                            logging.debug('retransmission')
+                            pass
+                        else:
+                            #fork
+                            logging.debug('strong fork')
+                            pass
+                    else:
+                        #fork
+                        logging.debug('weak fork')
+                        pass
                 #
                 self.f.set()
             except (zmq.ContextTerminated):
@@ -142,21 +171,12 @@ class Node(object):
                 logging.info("Mined block %s" % b.hash)
                 sqldb.writeBlock(b)
                 self.bchain.addBlocktoBlockchain(b)
-                self.psocket.send_multipart(['block', pickle.dumps(b, 2)])
+                self.psocket.send_multipart([consensus.MSG_BLOCK, self.ipaddr, pickle.dumps(b, 2)])
             else:
                 self.e.clear()
 
     def readBlock(self):
         pass
-
-    def checkBlock(self):
-        #if new_hash == (hashlib.sha256(str(name+bchain[0])+str(nonce)).hexdigest()):
-        #raise StopMineException("")
-        #self.psocket.send_string("ok")
-        #e.set()
-        return True
-        #else:
-        #    return False
 
     def probe(self):
         for i in self.peers:
@@ -164,27 +184,42 @@ class Node(object):
             if not x:
                 self.removePeer(i)
 
-    def sync(self):
-        first = last = self.bchain.getLastBlock().index
-        rBlock = None
+    def sync(self, rBlock=None, address=None):
+        # TODO change variables names and test again
+        self.synced = True
+        logging.debug('syncing...')
         # limit number of peers?
-        for i in range(0,min(len(self.peers),3)):
-            i+=1
-            logging.debug('request #%d' % i)
-            b = self.reqLastBlock()
-            if b:
-                logging.debug('Block index %s' % b.index)
-            if b and (b.index > last):
-                rBlock = b
-                last = rBlock.index
-        if rBlock and (last > first):
-            if (last-first) == 1:
+        if not rBlock:
+            rBlock = self.bchain.getLastBlock()
+            for i in range(0,min(len(self.peers),3)):
+                i+=1
+                logging.debug('request #%d' % i)
+                b, ip = self.reqLastBlock()
+                if b:
+                    logging.debug('Block index %s' % b.index)
+                if (b and (b.index > rBlock.index)):
+                    rBlock = b
+                    address = ip
+                    logging.debug('Best index %s with ip %s' % (b.index, ip))
+        last = self.bchain.getLastBlock()
+        #
+        if (rBlock.index > last.index):
+            self.e.set()
+            if (rBlock.index-last.index == 1) and consensus.validateBlock(rBlock, last):
+                logging.debug('valid block')
                 sqldb.writeBlock(rBlock)
+                self.bchain.addBlocktoBlockchain(rBlock)
             else:
-                l = self.reqBlocks(first+1, last)
+                l = self.reqBlocks(address, last.index+1, rBlock.index)
                 if  l:
-                    sqldb.writeBlock(l)
-            self.bchain.addBlocktoBlockchain(rBlock)
+                    # validate here
+                    error = consensus.validateChain(self.bchain, l)
+                    if error:
+                        # maybe fork, request previous
+                        logging.debug('fork')
+                        # sync again?
+                    #sqldb.writeBlock(l)
+        logging.debug('synced')
 
     def messageHandler(self):
         # reqrepServer
@@ -195,10 +230,8 @@ class Node(object):
                 messages = self.repsocket.recv_multipart()
             except zmq.ContextTerminated:
                 break
-            #time.sleep(1)
             reply = consensus.handleMessages(self.bchain, messages)
-            # TODO message multipart
-            self.repsocket.send_pyobj(reply)
+            self.repsocket.send_multipart([self.ipaddr, pickle.dumps(reply, 2)])
 
     def rpcServer(self, ip='127.0.0.1', port=9999):
         self.bind(self.rpcsocket, ip, port)
@@ -213,15 +246,19 @@ class Node(object):
             if cmd == rpc.MSG_LASTBLOCK:
                 b = self.bchain.getLastBlock()
                 self.rpcsocket.send(b.blockInfo())
+            elif cmd == rpc.MSG_BLOCKCHAIN:
+                b = self.bchain.Info()
+                self.rpcsocket.send(b)
             elif cmd == rpc.MSG_BLOCK:
-                b = block.dbtoBlock(sqldb.blockQuery(messages))
-                self.rpcsocket.send(b.blockInfo())
+                b = sqldb.dbtoBlock(sqldb.blockQuery(messages))
+                self.rpcsocket.send(b.blockInfo() if b else 'error')
             elif cmd == rpc.MSG_BLOCKS:
                 # TODO add SQL query BETWEEN
                 l = sqldb.blocksListQuery(messages)
                 blocks = []
                 for b in l:
-                    blocks.append(block.dbtoBlock(b).blockInfo())
+                    # test if error
+                    blocks.append(sqldb.dbtoBlock(b).blockInfo())
                 self.rpcsocket.send_pyobj(blocks)
             elif cmd == rpc.MSG_ADD:
                 m = self.addPeer(messages[1])
@@ -247,37 +284,48 @@ class Node(object):
 
 # Client request-reply functions
 
-    def _poll(self):
+    def _poll(self, socket=None):
+        #
+        s = socket if socket else self.reqsocket
         try:
             evts = dict(self.poller.poll(5000))
         except KeyboardInterrupt:
-            return None
-        if self.reqsocket in evts and evts[self.reqsocket] == zmq.POLLIN:
-            # TODO multipart messages?
-            return self.reqsocket.recv_pyobj()
+            return None, None
+        if s in evts and evts[s] == zmq.POLLIN:
+            m = s.recv_multipart()
+            #logging.debug(m[-2])
+            return pickle.loads(m[-1]), m[-2]
         else:
             logging.debug('No response from node (empty pollin evt)')
-            return None
+            return None, None
 
     def reqLastBlock(self):
-        self.reqsocket.send(consensus.MSG_LASTBLOCK)
+        self.reqsocket.send_multipart([consensus.MSG_LASTBLOCK,])
         logging.debug('Requesting most recent block')
-        return block.dbtoBlock(self._poll())
+        m, address = self._poll()
+        return sqldb.dbtoBlock(m), address
 
     def reqBlock(self, index):
         self.reqsocket.send_multipart([consensus.MSG_BLOCK, str(index)])
         logging.debug('Requesting block index %s' % index)
-        return block.dbtoBlock(self._poll())
+        m = self._poll()[0]
+        return sqldb.dbtoBlock(m)
 
-    def reqBlocks(self, first, last):
-        self.reqsocket.send_multipart([consensus.MSG_BLOCKS, str(first), str(last)])
-        logging.debug('Requesting blocks %s to %s', first+1, last)
-        return self._poll()
+    def reqBlocks(self, address, first, last):
+        # using another socket for direct connect
+        self.router.connect("tcp://%s:%s" % (address, self.port+1))
+        time.sleep(1)
+        logging.debug('Requesting blocks %s to %s', first, last)
+        self.router.send_multipart([consensus.MSG_BLOCKS, str(first), str(last)])
+        m = self._poll(self.router)[0]
+        self.router.disconnect("tcp://%s:%s" % (address, self.port+1))
+        return m
 
     def hello(self):
         self.reqsocket.send_multipart([consensus.MSG_HELLO,])
         logging.debug('Probing peer alive')
-        return self._poll()
+        m = self._poll()[0]
+        return m
 
 # Main program
 
@@ -341,10 +389,8 @@ def main():
     listen_thread.start()
     threads.append(listen_thread)
     #
-    n.bind(n.psocket)
-    time.sleep(1)
 
-    # Check peers most recent block
+    # Check peers most recent block (thread to check periodically)
     n.sync()
 
     # Miner thread
@@ -353,6 +399,9 @@ def main():
     miner_thread.start()
     threads.append(miner_thread)
 
+    #sync_thread = threading.Thread(name='sync', target=n.sync)
+    #sync_thread.start()
+    #threads.append(listen_thread)
     if args.miner:
         n.start.set()
         n.f.set()
@@ -367,13 +416,14 @@ def main():
         pass
     finally:
         #n.exit(args.ipaddr)
+        #n.timer.cancel()
         n.k.set()
         n.e.set()
         n.f.set()
         n.start.set()
-        #for t in threads:
-        #    t.join()
         n.close()
+        for t in threads:
+           t.join()
         print n.bchain.Info()
         # try: # TODO fix stucking on term or Assertion failed
         #     n.ctx.term()
