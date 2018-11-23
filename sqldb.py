@@ -10,22 +10,24 @@ def dbConnect():
     db = sqlite3.connect(databaseLocation)
     cursor = db.cursor()
     cursor.execute("""CREATE TABLE IF NOT EXISTS blocks (
-        id integer primary key, 
+        id integer NOT NULL, 
         ctime text, 
         phash text, 
-        hash text, 
-        nonce integer,
-        mroot text,
-        tx text)""")
+        hash text NOT NULL, 
+        nonce integer, 
+        mroot text, 
+        tx text, 
+        PRIMARY KEY (id, hash))""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS branches (
-        id integer, 
+        id integer NOT NULL, 
         ctime text, 
         phash text, 
-        hash text, 
-        nonce integer,
-        mroot text,
-        tx text,
-        FOREIGN KEY(id) REFERENCES blocks(id))""")
+        hash text NOT NULL, 
+        nonce integer, 
+        mroot text, 
+        tx text, 
+        PRIMARY KEY (id, hash),  
+        FOREIGN KEY (id) REFERENCES blocks(hash))""")
     db.commit()
     db.close()
 
@@ -39,7 +41,7 @@ def dbCheck():
     # Empty database
     if not lastBlock_db:
         genesis = bc.getLastBlock()
-        writeBlock(genesis, cursor)
+        writeBlock(genesis)
     db.commit()
     db.close()
     return bc
@@ -49,15 +51,16 @@ def writeBlock(b):
     cursor = db.cursor()
     try:
         if isinstance(b, list):
-            cursor.executemany('INSERT INTO blocks VALUES (?,?,?,?,?,?)', b)
+            cursor.executemany('INSERT INTO blocks VALUES (?,?,?,?,?,?,?)', b)
         else:
-            cursor.execute('INSERT INTO blocks VALUES (?,?,?,?,?,?)', (
+            cursor.execute('INSERT INTO blocks VALUES (?,?,?,?,?,?,?)', (
                     b.__dict__['index'],
                     b.__dict__['timestamp'],
                     b.__dict__['prev_hash'],
                     b.__dict__['hash'],
                     b.__dict__['nonce'],
-                    b.__dict__['mroot']))
+                    b.__dict__['mroot'],
+                    b.__dict__['tx']))
     except sqlite3.IntegrityError:
         logger.warning('db insert duplicated block')
     finally:
@@ -88,4 +91,10 @@ def blocksListQuery(messages):
     cursor.execute('SELECT * FROM blocks WHERE id IN ({0})'.format(', '.join('?' for _ in idlist)), idlist)
     l = cursor.fetchall()
     db.close()
-    return l
+    return 
+
+def dbtoBlock(b):
+    if isinstance(b, block.Block) or b is None:
+        return b
+    else:
+        return block.Block(b[0],b[2],b[4],b[3],b[1],b[6])
