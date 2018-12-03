@@ -1,4 +1,5 @@
 *.pyc
+*.conf
 .ipynb_checkpoints
 tests/
 tmp/

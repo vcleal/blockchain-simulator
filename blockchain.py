@@ -35,12 +35,3 @@ class Blockchain:
     def serializeblockchain(self):
         with  open("blockchain.json", "w") as write_file:
             json.dump(self.Info, write_file)
-
-# if __name__ == "__main__":
-#    a = Block(2,"",3456)
-#    b = Block(3,"",3457)
-#    bc = Blockchain()
-#    bc.chain.append(a)
-#    bc.chain.append(b)
-#    print(bc.Info())
-

@@ -12,29 +12,28 @@ def dbConnect():
     cursor.execute("""CREATE TABLE IF NOT EXISTS blocks (
         id integer NOT NULL, 
         ctime text, 
-        phash text, 
+        prev_hash text, 
         hash text NOT NULL, 
         nonce integer, 
         mroot text, 
         tx text, 
         PRIMARY KEY (id, hash))""")
-    cursor.execute("""CREATE TABLE IF NOT EXISTS branches (
+    cursor.execute("""CREATE TABLE IF NOT EXISTS chain (
         id integer NOT NULL, 
         ctime text, 
-        phash text, 
+        prev_hash text, 
         hash text NOT NULL, 
         nonce integer, 
         mroot text, 
         tx text, 
-        PRIMARY KEY (id, hash),  
-        FOREIGN KEY (id) REFERENCES blocks(hash))""")
+        PRIMARY KEY (id))""")
     db.commit()
     db.close()
 
 def dbCheck():
     db = sqlite3.connect(databaseLocation)
     cursor = db.cursor()
-    cursor.execute('SELECT * FROM blocks WHERE id = (SELECT MAX(id) FROM blocks)')
+    cursor.execute('SELECT * FROM chain WHERE id = (SELECT MAX(id) FROM blocks)')
     # Last block from own database
     lastBlock_db = cursor.fetchone()
     bc = blockchain.Blockchain(lastBlock_db)
@@ -67,10 +66,69 @@ def writeBlock(b):
         db.commit()
         db.close()
 
+def writeAll(b):
+    db = sqlite3.connect(databaseLocation)
+    cursor = db.cursor()
+    try:
+        if isinstance(b, list):
+            cursor.executemany('INSERT INTO blocks VALUES (?,?,?,?,?,?,?)', b)
+            cursor.executemany('INSERT INTO chain VALUES (?,?,?,?,?,?,?)', b)
+        else:
+            cursor.execute('INSERT INTO blocks VALUES (?,?,?,?,?,?,?)', (
+                    b.__dict__['index'],
+                    b.__dict__['timestamp'],
+                    b.__dict__['prev_hash'],
+                    b.__dict__['hash'],
+                    b.__dict__['nonce'],
+                    b.__dict__['mroot'],
+                    b.__dict__['tx']))
+            cursor.execute('INSERT INTO chain VALUES (?,?,?,?,?,?,?)', (
+                    b.__dict__['index'],
+                    b.__dict__['timestamp'],
+                    b.__dict__['prev_hash'],
+                    b.__dict__['hash'],
+                    b.__dict__['nonce'],
+                    b.__dict__['mroot'],
+                    b.__dict__['tx']))
+    except sqlite3.IntegrityError:
+        logger.warning('db insert duplicated block')
+    finally:
+        db.commit()
+        db.close()
+
+def writeChain(b):
+    db = sqlite3.connect(databaseLocation)
+    cursor = db.cursor()
+    try:
+        if isinstance(b, list):
+            cursor.executemany('INSERT INTO chain VALUES (?,?,?,?,?,?,?)', b)
+        else:
+            cursor.execute('INSERT INTO chain VALUES (?,?,?,?,?,?,?)', (
+                    b.__dict__['index'],
+                    b.__dict__['timestamp'],
+                    b.__dict__['prev_hash'],
+                    b.__dict__['hash'],
+                    b.__dict__['nonce'],
+                    b.__dict__['mroot'],
+                    b.__dict__['tx']))
+    except sqlite3.IntegrityError:
+        logger.warning('db insert duplicated block')
+    finally:
+        db.commit()
+        db.close()
+
+def forkQuery(messages):
+    db = sqlite3.connect(databaseLocation)
+    cursor = db.cursor()
+    cursor.execute('SELECT * FROM blocks WHERE id = ? AND hash = (SELECT prev_hash FROM chain WHERE id = ?))', (messages[1],messages[1]-1))
+    b = cursor.fetchone()
+    db.close()
+    return b
+
 def blockQuery(messages):
     db = sqlite3.connect(databaseLocation)
     cursor = db.cursor()
-    cursor.execute('SELECT * FROM blocks WHERE id = ?', (messages[1],))
+    cursor.execute('SELECT * FROM chain WHERE id = ?', (messages[1],))
     b = cursor.fetchone()
     db.close()
     return b
@@ -78,7 +136,7 @@ def blockQuery(messages):
 def blocksQuery(messages):
     db = sqlite3.connect(databaseLocation)
     cursor = db.cursor()
-    cursor.execute('SELECT * FROM blocks WHERE id BETWEEN ? AND ?', (messages[1],messages[2]))
+    cursor.execute('SELECT * FROM chain WHERE id BETWEEN ? AND ?', (messages[1],messages[2]))
     l = cursor.fetchall()
     db.close()
     return l
@@ -88,12 +146,13 @@ def blocksListQuery(messages):
     cursor = db.cursor()
     idlist = messages[1:]
     #idlist = [int(i) for i in messages[1:]]
-    cursor.execute('SELECT * FROM blocks WHERE id IN ({0})'.format(', '.join('?' for _ in idlist)), idlist)
+    cursor.execute('SELECT * FROM chain WHERE id IN ({0})'.format(', '.join('?' for _ in idlist)), idlist)
     l = cursor.fetchall()
     db.close()
     return l
 
 def dbtoBlock(b):
+    """ Transform database tuple to Block object """
     if isinstance(b, block.Block) or b is None:
         return b
     else:

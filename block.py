@@ -17,7 +17,6 @@ class Block:
         else: # mostly genesis
             self.hash = self.calcBlockhash()
 
-    # TODO Merkle tree class
     def calcMerkleRoot(self):
         return hashlib.sha256(self.tx).hexdigest()
 

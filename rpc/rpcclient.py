@@ -4,14 +4,28 @@ import zmq
 import sys
 from messages import *
 
-#TODO argparse
-
 if __name__ == '__main__':
+    help_string = '''usage: %s [-h]
+        <command> [<args>]
+
+Blockchain RPC client
+
+These are the commands available:
+
+getlastblock        Print the last block info
+getblock <index>    Print the block info with index <index>
+getblocks <list>    Print the blocks info from index <list>
+startmining         Start the miner thread
+stopmining          Stop the miner thread
+addpeer <ip>        Add <ip> to the node peers list
+removepeer <ip>     Remove <ip> to the node peers list
+getpeerinfo         Print the peers list
+exit                Terminate and exit the node.py program running
+''' % sys.argv[0]
+
     ctx = zmq.Context.instance()
     reqsocket = ctx.socket(zmq.REQ)
-    # check error
     reqsocket.setsockopt(zmq.RCVTIMEO, 5000)
-    #repsocket = self.ctx.socket(zmq.REP)
     reqsocket.connect("tcp://127.0.0.1:9999")
     if len(sys.argv) >= 2:
         try:
@@ -50,6 +64,8 @@ if __name__ == '__main__':
             elif MSG_EXIT == sys.argv[1]:
                 reqsocket.send(sys.argv[1])
                 print reqsocket.recv_string()
+            elif sys.argv[1] == '-h':
+                print help_string
             else:
                 print "Unknown command"
                 sys.exit(2)
@@ -59,5 +75,6 @@ if __name__ == '__main__':
         reqsocket.close(linger=0)
         ctx.term()
     else:
-        print "usage: %s getlastblock|startmining|stopmining|addpeer <peer>|removepeer <peer>|getpeerinfo" % sys.argv[0]
+        print '''usage: %s [-h]
+        <command> [<args>]''' % sys.argv[0]
         sys.exit(2)
