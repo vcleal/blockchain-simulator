@@ -1,0 +1,7 @@
+*.pyc
+*.conf
+.ipynb_checkpoints
+tests/
+tmp/
+docs/*.asta*
+blocks/*.db
