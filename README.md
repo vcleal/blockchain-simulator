@@ -1,6 +1,5 @@
-# Blockchain consensus simulator
-
-Simulate a simple blockchain on a real distributed network emulated on Mininet.
+# bc_testbed
+A testbed to implement and evaluate blockchain consensus mechanisms.
 
 **Dependencies:**
 - Python 2.7.x
@@ -21,13 +20,15 @@ list of peers IP addresses
 start node mining
 - `--log`  
 console log level
+- `-c`  
+configuration file
 
-## simple.py
+## simpleNet.py
 
 Simple single switch Mininet topology that runs `node.py` in each host with private directories.
 
 **Arguments:**
-- number of hosts on switch (*pending*)
+- number of hosts on switch
 
 ## rpc/rpcclient.py
 
@@ -43,7 +44,7 @@ remove X peer and disconnect
 - `getblock X`  
 block X information
 - `getblocks X Y`  
-blocks X to Y information
+blocks X and Y information
 - `getpeerinfo`  
 IP of all connected peers  
 - `startmining`  
