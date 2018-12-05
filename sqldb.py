@@ -6,6 +6,8 @@ import blockchain
 
 databaseLocation = 'blocks/blockchain.db'
 
+# write methods work with block objects instead of tuple from sqlite db
+
 def dbConnect():
     db = sqlite3.connect(databaseLocation)
     cursor = db.cursor()
@@ -117,11 +119,12 @@ def writeChain(b):
         db.commit()
         db.close()
 
-def forkQuery(messages):
+def forkUpdate(index):
     db = sqlite3.connect(databaseLocation)
     cursor = db.cursor()
-    cursor.execute('SELECT * FROM blocks WHERE id = ? AND hash = (SELECT prev_hash FROM chain WHERE id = ?))', (messages[1],messages[1]-1))
+    cursor.execute('SELECT * FROM blocks WHERE id = ? AND hash = (SELECT prev_hash FROM chain WHERE id = ?))', (index,index-1))
     b = cursor.fetchone()
+    cursor.execute('INSERT OR REPLACE INTO chain VALUES (?,?,?,?,?,?,?)', b)
     db.close()
     return b
 

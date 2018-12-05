@@ -38,19 +38,19 @@ def validateBlock(block, lastBlock):
 		return True
 	return False
 
-def validateChain(bc, l): # TODO return index
+def validateChain(bc, l):
     lastBlock = bc.getLastBlock()
     for b in l:
         b = sqldb.dbtoBlock(b)
         if not validateBlockHeader(b): # invalid
-            return b, False
+            return b, True
         if validateBlock(b, lastBlock):
             lastBlock = b
             bc.addBlocktoBlockchain(b)
             sqldb.writeAll(b)
-        else: # invalid
-            return b, True
-    return None, True
+        else: # fork
+            return b, False
+    return None, False
 
 def selectChain():
     pass

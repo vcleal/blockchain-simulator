@@ -3,7 +3,6 @@
 import zmq
 import threading
 import time
-#import sys
 import argparse
 from ConfigParser import SafeConfigParser
 import block
@@ -15,13 +14,10 @@ from collections import deque, Mapping
 import logging
 import rpc.messages as rpc
 
-#TODO blockchain class and database decision (move to only db solution)
-#TODO old peers subscribe to new peer? [addr msg]
-#TODO better peer management and limit (use a p2p library - pyre or kademlia)
-#TODO connect only on request?
-#TODO serialization/deserialization, change pickle to json?
-#TODO add SQL query BETWEEN
-
+#TODO blockchain class and database decision (move to only db solution?)
+#TODO peer management and limit (use a p2p library - pyre, kademlia?)
+#TODO serialization/deserialization functions, change pickle to json?
+#TODO add SQL query BETWEEN in rpcServer
 #TODO check python 3+ compatibility
 
 class StopException(Exception):
@@ -182,10 +178,13 @@ class Node(object):
                 self.removePeer(i)
 
     def sync(self, rBlock=None, address=None):
-        """ Syncronize with peers and validate chain """
+        """ Syncronize with peers and validate chain
+        rBlock -- can be passed as argument to sync based on that block index instead of requesting
+        address -- try to force requests to use this ip address
+        """
         self.synced = True
         logging.debug('syncing...')
-        # Node starting from scratch
+        # Request before sync
         if not rBlock:
             rBlock = self.bchain.getLastBlock()
             # limit number of peers request
@@ -200,7 +199,7 @@ class Node(object):
                     address = ip
                     logging.debug('Best index %s with ip %s' % (b.index, ip))
         last = self.bchain.getLastBlock()
-        # Node syncing from start and from block received
+        # Sync based on rBlock
         if (rBlock.index > last.index):
             self.e.set()
             if (rBlock.index-last.index == 1) and consensus.validateBlock(rBlock, last):
@@ -211,31 +210,37 @@ class Node(object):
                 l = self.reqBlocks(last.index+1, rBlock.index, address)
                 if  l:
                     # validate and write
-                    blockerror, header = consensus.validateChain(self.bchain, l)
-                    if blockerror:
-                        if header and blockerror.index == last.index+1: # fork
+                    b_error, h_error = consensus.validateChain(self.bchain, l)
+                    if b_error:
+                        if not h_error and b_error.index == last.index+1:
                             logging.debug('fork')
-                            self.recursiveValidate(blockerror, last)
+                            sqldb.writeBlock(b_error)
+                            # trying to solve and pick a fork
+                            i = self.recursiveValidate(b_error)
+                            if i:
+                                for x in xrange(i,last.index):
+                                    sqldb.forkUpdate(x)
                         else:
                             logging.debug('invalid') # request again
-                            new = self.reqBlock(blockerror.index)
+                            new = self.reqBlock(b_error.index)
                             self.sync(new)
-                    #sqldb.writeBlock(l)
-                    consensus.selectChain()
         logging.debug('synced')
 
-    def recursiveValidate(blockerror, lastblock):
-        index = blockerror.index
-        while index:
-            new = self.reqBlock(index) or blockerror # request again if possible
-            if consensus.validateBlock(new, lastblock):
+    def recursiveValidate(self, blockerror):
+        index = blockerror.index - 1
+        pblock = sqldb.dbtoBlock(sqldb.blockQuery(index)) # previous block
+        tries = 3
+        while index and tries:
+            new = self.reqBlock(index)
+            if new and consensus.validateBlockHeader(new):
                 sqldb.writeBlock(new)
-                return
+                if consensus.validateBlock(new, pblock):
+                    return index
+                else:
+                    index -= 1
+                    pblock = sqldb.dbtoBlock(sqldb.blockQuery(index))
             else:
-                # save
-                sqldb.writeBlock(new)
-                index -= 1
-                lastblock = sqldb.dbtoBlock(sqldb.blockQuery(index))
+                tries -= 1
 
     def messageHandler(self):
         """ Consensus messages in REQ/REP pattern
@@ -276,7 +281,6 @@ class Node(object):
                 l = sqldb.blocksListQuery(messages)
                 blocks = []
                 for b in l:
-                    # test if error
                     blocks.append(sqldb.dbtoBlock(b).blockInfo())
                 self.rpcsocket.send_pyobj(blocks)
             elif cmd == rpc.MSG_ADD:
@@ -332,7 +336,7 @@ class Node(object):
         return sqldb.dbtoBlock(m)
 
     def reqBlocks(self, first, last, address=None):
-        """ Messages frames: [ 'getblocks', from, to ] """
+        """ Messages frames: [ 'getblocks', from index, to index ] """
         if address:
             # using another socket for direct ip connect, avoiding round-robin
             self.router.connect("tcp://%s:%s" % (address, self.port+1))
@@ -381,15 +385,16 @@ def main():
                         help='Specify the configuration file')
     args = parser.parse_args()
     # Configuration file parsing (defaults to command-line arguments if not exists)
-    cfgparser = SafeConfigParser({'ip': args.ipaddr, 'port': str(args.port), 'peers': args.peers, 'miner': str(args.miner).lower(), 'loglevel': 'warning'})
+    cfgparser = SafeConfigParser({'ip': args.ipaddr, 'port': str(args.port), 'peers': args.peers, 'miner': str(args.miner).lower(), 'loglevel': 'warning', 'diff': '5'})
     if cfgparser.read(args.config_file):
         args.peers = cfgparser.get('node','ip')
         args.port = int(cfgparser.get('node','port'))
         args.peers = cfgparser.get('node','peers').split('\n')
         args.miner = cfgparser.getboolean('node','miner')
+        args.diff = int(cfgparser.get('node','diff'))
         args.loglevel = _log_level_to_int(cfgparser.get('node','loglevel'))
     # File logging
-    logging.basicConfig(filename='tmp/log/example.log', filemode='w', level=logging.DEBUG,
+    logging.basicConfig(filename='tmp/log/example.log', filemode='w', level=args.loglevel,
         format='%(asctime)s %(levelname)s: %(message)s', datefmt='%d/%m/%Y %I:%M:%S')
     # set up logging to console
     console = logging.StreamHandler()
@@ -398,7 +403,7 @@ def main():
 
     threads = []
     #sqldb.databaseLocation = 'blocks/blockchain.db'
-    cons = consensus.Consensus(difficulty=5)
+    cons = consensus.Consensus(difficulty=args.diff)
     n = Node(args.ipaddr, args.port)
 
     # Connect to predefined peers
