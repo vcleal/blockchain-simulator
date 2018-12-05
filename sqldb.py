@@ -35,14 +35,14 @@ def dbConnect():
 def dbCheck():
     db = sqlite3.connect(databaseLocation)
     cursor = db.cursor()
-    cursor.execute('SELECT * FROM chain WHERE id = (SELECT MAX(id) FROM blocks)')
+    cursor.execute('SELECT * FROM chain WHERE id = (SELECT MAX(id) FROM chain)')
     # Last block from own database
     lastBlock_db = cursor.fetchone()
     bc = blockchain.Blockchain(lastBlock_db)
     # Empty database
     if not lastBlock_db:
         genesis = bc.getLastBlock()
-        writeBlock(genesis)
+        writeChain(genesis)
     db.commit()
     db.close()
     return bc
@@ -55,36 +55,6 @@ def writeBlock(b):
             cursor.executemany('INSERT INTO blocks VALUES (?,?,?,?,?,?,?)', b)
         else:
             cursor.execute('INSERT INTO blocks VALUES (?,?,?,?,?,?,?)', (
-                    b.__dict__['index'],
-                    b.__dict__['timestamp'],
-                    b.__dict__['prev_hash'],
-                    b.__dict__['hash'],
-                    b.__dict__['nonce'],
-                    b.__dict__['mroot'],
-                    b.__dict__['tx']))
-    except sqlite3.IntegrityError:
-        logger.warning('db insert duplicated block')
-    finally:
-        db.commit()
-        db.close()
-
-def writeAll(b):
-    db = sqlite3.connect(databaseLocation)
-    cursor = db.cursor()
-    try:
-        if isinstance(b, list):
-            cursor.executemany('INSERT INTO blocks VALUES (?,?,?,?,?,?,?)', b)
-            cursor.executemany('INSERT INTO chain VALUES (?,?,?,?,?,?,?)', b)
-        else:
-            cursor.execute('INSERT INTO blocks VALUES (?,?,?,?,?,?,?)', (
-                    b.__dict__['index'],
-                    b.__dict__['timestamp'],
-                    b.__dict__['prev_hash'],
-                    b.__dict__['hash'],
-                    b.__dict__['nonce'],
-                    b.__dict__['mroot'],
-                    b.__dict__['tx']))
-            cursor.execute('INSERT INTO chain VALUES (?,?,?,?,?,?,?)', (
                     b.__dict__['index'],
                     b.__dict__['timestamp'],
                     b.__dict__['prev_hash'],
@@ -119,12 +89,33 @@ def writeChain(b):
         db.commit()
         db.close()
 
+def replaceChain(b):
+    db = sqlite3.connect(databaseLocation)
+    cursor = db.cursor()
+    try:
+        if isinstance(b, tuple):
+            cursor.execute('REPLACE INTO chain VALUES (?,?,?,?,?,?,?)', b)
+        else:
+            cursor.execute('INSERT OR REPLACE INTO chain VALUES (?,?,?,?,?,?,?)', (
+                    b.__dict__['index'],
+                    b.__dict__['timestamp'],
+                    b.__dict__['prev_hash'],
+                    b.__dict__['hash'],
+                    b.__dict__['nonce'],
+                    b.__dict__['mroot'],
+                    b.__dict__['tx']))
+    except sqlite3.IntegrityError:
+        logger.warning('db insert duplicated block')
+    finally:
+        db.commit()
+        db.close()
+
 def forkUpdate(index):
     db = sqlite3.connect(databaseLocation)
     cursor = db.cursor()
-    cursor.execute('SELECT * FROM blocks WHERE id = ? AND hash = (SELECT prev_hash FROM chain WHERE id = ?))', (index,index-1))
+    cursor.execute('SELECT * FROM blocks WHERE id = {0} AND prev_hash = (SELECT hash FROM chain WHERE id = {1})'.format(index,index-1))
     b = cursor.fetchone()
-    cursor.execute('INSERT OR REPLACE INTO chain VALUES (?,?,?,?,?,?,?)', b)
+    #cursor.execute('REPLACE INTO chain VALUES (?,?,?,?,?,?,?)', b)
     db.close()
     return b
 

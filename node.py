@@ -130,7 +130,8 @@ class Node(object):
                     lb = self.bchain.getLastBlock()
                     if (b.index - lb.index == 1) and consensus.validateBlock(b, lb):
                         self.e.set()
-                        sqldb.writeAll(b)
+                        sqldb.writeBlock(b)
+                        sqldb.writeChain(b)
                         self.bchain.addBlocktoBlockchain(b)
                         # rebroadcast
                         #logging.debug('rebroadcast')
@@ -165,7 +166,8 @@ class Node(object):
             b = cons.generateNewblock(lastblock, self.e)
             if b and not self.e.is_set():
                 logging.info("Mined block %s" % b.hash)
-                sqldb.writeAll(b)
+                sqldb.writeBlock(b)
+                sqldb.writeChain(b)
                 self.bchain.addBlocktoBlockchain(b)
                 self.psocket.send_multipart([consensus.MSG_BLOCK, self.ipaddr, pickle.dumps(b, 2)])
             else:
@@ -204,7 +206,8 @@ class Node(object):
             self.e.set()
             if (rBlock.index-last.index == 1) and consensus.validateBlock(rBlock, last):
                 logging.debug('valid block')
-                sqldb.writeAll(rBlock)
+                sqldb.writeBlock(rBlock)
+                sqldb.writeChain(rBlock)
                 self.bchain.addBlocktoBlockchain(rBlock)
             else:
                 l = self.reqBlocks(last.index+1, rBlock.index, address)
@@ -216,10 +219,19 @@ class Node(object):
                             logging.debug('fork')
                             sqldb.writeBlock(b_error)
                             # trying to solve and pick a fork
-                            i = self.recursiveValidate(b_error)
-                            if i:
-                                for x in xrange(i,last.index):
-                                    sqldb.forkUpdate(x)
+                            n = self.recursiveValidate(b_error)
+                            if n:                                
+                                self.bchain.chain.clear() # TODO change this and refactor
+                                for i in xrange(n.index,last.index+1):
+                                    logging.debug('updating chain')
+                                    if i == 1:
+                                        sqldb.replaceChain(n)
+                                        self.bchain.addBlocktoBlockchain(n)
+                                    else:
+                                        n = sqldb.forkUpdate(i)
+                                        sqldb.replaceChain(n)
+                                        self.bchain.addBlocktoBlockchain(sqldb.dbtoBlock(n))
+                                consensus.validateChain(self.bchain, l)
                         else:
                             logging.debug('invalid') # request again
                             new = self.reqBlock(b_error.index)
@@ -228,19 +240,22 @@ class Node(object):
 
     def recursiveValidate(self, blockerror):
         index = blockerror.index - 1
-        pblock = sqldb.dbtoBlock(sqldb.blockQuery(index)) # previous block
+        pblock = sqldb.dbtoBlock(sqldb.blockQuery(['',index])) # previous block
         tries = 3
         while index and tries:
+            logging.debug('validating index %s' % index)
             new = self.reqBlock(index)
             if new and consensus.validateBlockHeader(new):
                 sqldb.writeBlock(new)
                 if consensus.validateBlock(new, pblock):
-                    return index
+                    logging.debug('returning')
+                    return new
                 else:
                     index -= 1
-                    pblock = sqldb.dbtoBlock(sqldb.blockQuery(index))
+                    pblock = sqldb.dbtoBlock(sqldb.blockQuery(['',index]))
             else:
                 tries -= 1
+        return new
 
     def messageHandler(self):
         """ Consensus messages in REQ/REP pattern
@@ -384,6 +399,7 @@ def main():
     parser.add_argument ('-c', '--config', dest='config_file', default='node.conf', type=str,
                         help='Specify the configuration file')
     args = parser.parse_args()
+    args.diff = 5
     # Configuration file parsing (defaults to command-line arguments if not exists)
     cfgparser = SafeConfigParser({'ip': args.ipaddr, 'port': str(args.port), 'peers': args.peers, 'miner': str(args.miner).lower(), 'loglevel': 'warning', 'diff': '5'})
     if cfgparser.read(args.config_file):
@@ -394,7 +410,7 @@ def main():
         args.diff = int(cfgparser.get('node','diff'))
         args.loglevel = _log_level_to_int(cfgparser.get('node','loglevel'))
     # File logging
-    logging.basicConfig(filename='tmp/log/example.log', filemode='w', level=args.loglevel,
+    logging.basicConfig(filename='tmp/log/example.log', filemode='w', level='debug',
         format='%(asctime)s %(levelname)s: %(message)s', datefmt='%d/%m/%Y %I:%M:%S')
     # set up logging to console
     console = logging.StreamHandler()

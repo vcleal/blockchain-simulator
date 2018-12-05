@@ -40,6 +40,7 @@ def validateBlock(block, lastBlock):
 
 def validateChain(bc, l):
     lastBlock = bc.getLastBlock()
+    print lastBlock.blockInfo()
     for b in l:
         b = sqldb.dbtoBlock(b)
         if not validateBlockHeader(b): # invalid
@@ -47,7 +48,8 @@ def validateChain(bc, l):
         if validateBlock(b, lastBlock):
             lastBlock = b
             bc.addBlocktoBlockchain(b)
-            sqldb.writeAll(b)
+            sqldb.writeBlock(b)
+            sqldb.writeChain(b)
         else: # fork
             return b, False
     return None, False
