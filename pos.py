@@ -1,38 +1,31 @@
-import Blockchain
-import Node
-import Consensus
+import node
+import block
+import datetime
 from collections import deque
-from Crypto.Random import random
-from Crypto.PublicKey import DSA
+import random
 import hashlib
+import crypto
 
 #TODO Register peer and set Stake
 #TODO use message to start minting
 #TODO process to verify minter
 
+MSG_REGISTER = "stake-register"
+MSG_VERIFY = "verify-block"
+
+
 class POS:
     def __init__(self, round):
+        self.difficulty = 8
         self.target = 2 ** (4 * self.difficulty) - 1
         self.round  = round
+        self.keys = None
     
     # Para iniciar o consenso os usuarios deven se registrar por meio de uma mensagem 'REGISTER'
     # Para iniciar o sorteio todos os peers online devem ter executado a função de consenso e enviar a mensagem 'ELECT'
     # uma vez finalizado o sorteio se envia o mensagem 'ELECTED' com um valor '1' se ganha caso contrario '0' e trocar o role a 'MINTER', este deve criar o novo bloco e coloca-lo na cadeia
     # Iniciar o processo de Novo
     
-    def signature(self):
-        sk = DSA.generate(1024)
-        h = SHA.new(message).digest()
-        k = random.StrongRandom().randint(1,key.q-1)
-        sig = key.sign(h,k)
-        return sig
-    
-    def verify_signature(self):
-        if key.verify(h,sig):
-            return True
-        else:
-            return False
-
     def register(self, Node):
         # Estabelecer o stake na rodada
         # enviar mensagem 'REGISTER',Node  para entrar no processo de consenso
@@ -40,35 +33,32 @@ class POS:
         
         return NotImplemented
     
-    def lottery(self, Node):
-        peers = Node.getPeers()
-        sum = get_total_stake()
-        probabilities = [x.getstake() / sum for x in peers]
-        elected = random_pick(peers, probabilities)
-        # Item, Message, Value
-        if elected == Node:
-           # Notificar a todos os outros nós
-        # Enviar ao nó o mensagem 'ELECTED', 1 ao escolhido e 'ELECTED', 0
-        #return elected, 'ELECTED', 0
-            return NotImplemented
-    
-    def mint(self, Node, lastBlock):
-        elected = random(Node, lastBlock)
-        if Node == elected:
-            return Block(lastBlock.index + 1, lastBlock.hash, nonce, new_hash, timestamp)
-        
-    def verify_minter(self):
-        # enviar uma menssagem para saber quem foi escolhido 
-        return NotImplemented
-    
-    def random(self, lastBlock, Node):
-        timestamp = str(datetime.datetime.now())
-        header = chr(random.randint(1,100)) + str(lastBlock.index + 1) + str(lastBlock.hash) + timestamp
-        hash_result = hashlib.sha256(str(header).hexdigest()
-        if (int(hash_result, 16) < (Node.balance * target)):
+    def election(self, hash, Node):
+        if (int(hash, 16) < (Node.balance * self.target)):
             return True
         else:
             return False
+
+   
+    def mint(self, Node, lastBlock, stop):
+        tx = chr(random.randint(1,100))
+        mroot = hashlib.sha256(tx).hexdigest()
+        timestamp = str(datetime.datetime.now())
+        c_header = str(lastBlock.hash) + mroot + timestamp
+        keys = Node.keys()
+        signature = crypto.sign(str(lastBlock.index + 1) + str(lastBlock.hash),keys)
+        hash_result = crypto.hash(str(c_header))
+        if stop.is_set():
+            return False, False, False, False
+        elected = self.election(Node, lastBlock)
+        if elected:
+            return block.Block(lastBlock.index + 1, lastBlock.hash,keys,signature,hash_result)
+        
+    def verify_minter(self, s, Node):
+        #if 
+        # enviar uma menssagem para saber quem foi escolhido 
+        return NotImplemented
+    
         
     # def random_pick(some_list, probabilities):
     #     x = random.uniform(0, 1)
@@ -84,3 +74,16 @@ class POS:
     #         sum =+ i.getstake()
             
     #     return sum
+
+    # def lottery(self, Node):
+        #     peers = Node.getPeers()
+        #     sum = get_total_stake()
+        #     probabilities = [x.getstake() / sum for x in peers]
+        #     elected = random_pick(peers, probabilities)
+            # Item, Message, Value
+            #if elected == Node:
+            # Notificar a todos os outros nós
+            # Enviar ao nó o mensagem 'ELECTED', 1 ao escolhido e 'ELECTED', 0
+            #return elected, 'ELECTED', 0
+                # return NotImplemented
+    

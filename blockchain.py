@@ -8,26 +8,33 @@ class Blockchain:
         self.chain = deque()
         if db:
             # order in database definition
-            b = db if isinstance(db, Block) else Block(index=db[0],timestamp=db[1],prev_hash=db[2],b_hash=db[3],nonce=db[4])
+            b = db if isinstance(db, Block) else Block(index=db[0],timestamp=db[1],prev_hash=db[2],b_hash=db[3],nonce=db[4],tx=db[6])
             self.chain.appendleft(b)
         else:
-            self.genesisBlock = Block(0,"",0,timestamp="2018-10-10 00:00:0.0")
-            self.chain.appendleft(self.genesisBlock)
+            genesisBlock = Block(0,"",0,timestamp="2018-10-10 00:00:0.0")
+            self.chain.appendleft(genesisBlock)
 
-    def getchain():
+    def getchain(self):
         return self.chain
 
     def getLastBlock(self):
         return self.chain[0]
     
+    def getBlock(self, index):
+        return self.chain[index % self.getLenghtchain]
+    
+    def getLenghtchain(self):
+        return len(self.chain)
+    
     def rawBlockchainInfo(self):
-        return {'chain lenght': len(self.chain)}
+        return {'chain lenght': self.getLenghtchain}
 
     def Info(self):
         blocks = []
         for i in reversed(self.chain):
             blocks.append(i.rawblockInfo())
-        return json.dumps({'blocks': blocks}, indent=4)
+        return json.dumps({'blocks': blocks}, indent=4)    
+        #return json.dumps({'blocks': blocks}, indent=4, encoding = "ISO-8859-1")
 
     def addBlocktoBlockchain(self,Block):
         self.chain.appendleft(Block)

@@ -6,6 +6,7 @@ from mininet.log import setLogLevel, info
 
 from functools import partial
 from time import sleep, time
+from random import shuffle
 
 from signal import SIGINT
 
@@ -14,9 +15,10 @@ from signal import SIGINT
 
 def testHostWithPrivateDirs():
     "Test bind mounts"
-    topo = SingleSwitchTopo( 3 )
+    topo = SingleSwitchTopo( 5 )
     # change to pwd
-    privateDirs = privateDirs=[('/media/mininet/blockchain-simulator/blocks', '/media/mininet/blockchain-simulator/tmp/%(name)s/blocks'), '/media/mininet/blockchain-simulator/tmp/log']
+    #privateDirs = privateDirs=[('/media/mininet/blockchain-simulator/blocks', '/media/mininet/blockchain-simulator/tmp/%(name)s/blocks'), '/media/mininet/blockchain-simulator/tmp/log']
+    privateDirs = privateDirs=[('blocks', 'tmp/%(name)s/blocks'), 'tmp/log']
     host = partial( Host,
                     privateDirs=privateDirs )
     net = Mininet( topo=topo, host=host )
@@ -24,14 +26,16 @@ def testHostWithPrivateDirs():
     popens = {}
     startServer(net)
     CLI( net )
-    #stopServer(net.hosts)
+    stopServer(net.hosts)
     net.stop()
 
 def startServer(net):
     for h in net.hosts:
         o = net.hosts[:]
         o.remove(h)
-        ips = map(lambda x: x.IP(),o)
+        #ips = map(lambda x: x.IP(),o)
+        ips = [x.IP() for x in o]
+        shuffle(ips)
         peers = ' '.join(ips)
         #sleep(1)
         info('*** Blockchain node starting on %s\n' % h)
@@ -41,9 +45,9 @@ def startServer(net):
 
 def stopServer(hosts):
     for h in hosts:
-        # TODO
-        h.cmd('')
-        info('*** Blockchain server stopping on %s\n' % h)
+        #
+        h.cmd('rpc/rpcclient.py exit')
+        info('*** Blockchain node stopping on %s\n' % h)
 
 if __name__ == '__main__':
     setLogLevel( 'info' )
