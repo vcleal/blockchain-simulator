@@ -53,8 +53,6 @@ class Node(object):
         #self.reqsocket.RCVTIMEO = 3000 # in milliseconds
         #self.reqsocket.setsockopt(zmq.LINGER, 0)
         self.reqsocket.setsockopt(zmq.REQ_RELAXED, 1)
-        self.balance = 0
-        self.stake = 0
         self.synced = False
         self.peers = deque()
         self.bchain = {}

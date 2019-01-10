@@ -1,6 +1,6 @@
-from Crypto.PublicKey import DSA
-from Crypto.Hash import SHA
-from Crypto.Random import random
+from fastecdsa import keys, curve, ecdsa
+import hashlib
+import random
 
 def gen_vrf_keys(value, sk):
     return NotImplemented
@@ -12,19 +12,17 @@ def verify_vrf(value, sk):
     return NotImplemented
 
 def hash(value):
-    return SHA.new(value).digest()
+    return hashlib.sha256(value).hexdigest()
 
-def sign(message, keys):
-    r = random.StrongRandom().randint(1,keys.q-1)
-    sig = keys.sign(message, r)
-    return sig
+def sign(message, private_key):
+    r, s = ecdsa.sign(message, private_key)
+    return r, s
 
-def ver_sign(keys, message, sig):
-    if keys.verify(message,sig):
+def ver_sign(r, s, message, public_key):
+    if ecdsa.verify((r, s), message, public_key):
         return True
     else:
         return False
 
 def gen_sign_keys():
-    return DSA.generate(1024)
-        
+    return keys.gen_keypair(curve.secp256k1)   

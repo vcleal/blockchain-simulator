@@ -5,6 +5,7 @@ import datetime
 import threading
 import blockchain
 import sqldb
+import wallet
 
 MSG_LASTBLOCK = 'getlastblock'
 MSG_BLOCK = 'block'
@@ -32,10 +33,10 @@ def validateBlockHeader(b):
     return False
 
 def validateBlock(block, lastBlock):
-	# check block chaining
-	if block.prev_hash == lastBlock.hash:
-		return True
-	return False
+    # check block chaining
+    if block.prev_hash == lastBlock.hash:
+        return True
+    return False
 
 def validateChain(bc, l):
     lastBlock = bc.getLastBlock()
@@ -77,8 +78,21 @@ class Consensus:
                 #print("Mined Block " + b.hash)
                 return hash_result, nonce, timestamp, tx
         return False, nonce, timestamp, tx
+    
+    def POS(self, lastBlock, r, stake, stop):
+        tx = chr(random.randint(1,100))
+        mroot = hashlib.sha256(tx).hexdigest()
+        c_header = str(lastBlock.hash) + mroot
+        round = lastBlock.round + r 
+        if stop.is_set():
+            return False, False, False, False
+        hash_result = hashlib.sha256(str(c_header) + str(round)).hexdigest()    
+        if hash_result < stake * self.target:
+            return hash_result, tx
+        return False, tx
 
     def generateNewblock(self, lastBlock, stop=False):
+        r = 0
         while True:
             if self.type == 'PoW':
                 new_hash, nonce, timestamp, tx = self.POW(lastBlock, stop)
@@ -87,8 +101,11 @@ class Consensus:
                 if new_hash:
                     return block.Block(lastBlock.index + 1, lastBlock.hash, nonce, new_hash, timestamp, tx)
             elif self.type == 'PoS':
-                new_hash, nonce, timestamp, tx = self.POS(lastBlock, stop)
+                r = r + 1
+                new_hash, tx = self.POS(lastBlock, r, wallet.getStake(),stop)
                 if new_hash:
+                    last_arrive_time =  new_arrive_time
+                    new_arrive_time = str(datetime.datetime.now())
                     return block.Block(lastBlock.index + 1, lastBlock.hash, nonce, new_hash, timestamp, tx)
         
     def rawConsensusInfo(self):
